@@ -19,7 +19,7 @@ use platform_core::{
 };
 use platform_sdk::{BoxFuture, TxContext, TxEngine, UtcMillis};
 use sqlx::{
-    AssertSqlSafe, Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
+    AssertSqlSafe, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
@@ -221,15 +221,14 @@ pub fn validate_local_filesystem_path(path: &Path) -> Result<(), SqliteBootstrap
             });
         }
         #[cfg(target_os = "linux")]
-        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
-            if let Some(fstype) = detect_mount_fstype_from_proc_mounts(&canonical, &mounts) {
-                if FORBIDDEN_NETWORK_FSTYPES.contains(&fstype.as_str()) {
-                    return Err(SqliteBootstrapError::NetworkPathForbidden {
-                        path: canonical.display().to_string(),
-                        reason: format!("network mount fstype={fstype}"),
-                    });
-                }
-            }
+        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts")
+            && let Some(fstype) = detect_mount_fstype_from_proc_mounts(&canonical, &mounts)
+            && FORBIDDEN_NETWORK_FSTYPES.contains(&fstype.as_str())
+        {
+            return Err(SqliteBootstrapError::NetworkPathForbidden {
+                path: canonical.display().to_string(),
+                reason: format!("network mount fstype={fstype}"),
+            });
         }
     }
 

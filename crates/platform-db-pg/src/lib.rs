@@ -14,7 +14,7 @@ use platform_core::{
 };
 use platform_sdk::{BoxFuture, TxContext, TxEngine, UtcMillis};
 use sqlx::{
-    AssertSqlSafe, Executor, PgConnection, PgPool, Postgres, Row, Transaction,
+    AssertSqlSafe, PgConnection, PgPool, Postgres, Row, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
 };
 

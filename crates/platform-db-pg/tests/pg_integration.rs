@@ -100,7 +100,7 @@ fn test_manifest(
 
 #[tokio::test]
 async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(url) = test_pg_url().map_err(|e| e)? else {
+    let Some(url) = test_pg_url()? else {
         return Ok(());
     };
 

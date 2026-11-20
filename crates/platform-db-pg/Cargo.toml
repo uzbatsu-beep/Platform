@@ -9,7 +9,14 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+platform-core.workspace = true
 platform-sdk.workspace = true
 sqlx = { workspace = true, features = ["postgres"] }
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+semver.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true

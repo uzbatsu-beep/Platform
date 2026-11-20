@@ -32,8 +32,64 @@ jobs:
         run: cargo check -p platform-server --no-default-features --features server --locked
       - name: Check Standalone feature profile (SQLite 3.54.1 bundled, locked)
         run: cargo check -p platform-server --no-default-features --features standalone --locked
-      - name: Run workspace unit & SQLite runtime (version/FTS5/WAL) tests
+      - name: Run workspace unit & SQLite 3.54.1 integration tests
         run: cargo test --workspace --locked
+
+  postgres-18-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: neon_test
+          POSTGRES_PASSWORD: neon_test_password
+          POSTGRES_DB: neon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U neon_test -d neon_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NEON_REQUIRE_PG_TESTS: "1"
+      NEON_TEST_PG_URL: "postgres://neon_test:neon_test_password@127.0.0.1:5432/neon_test"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (1.100.0)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+      - name: Run PostgreSQL 18 integration tests (locked)
+        run: cargo test -p platform-db-pg --locked -- --nocapture
+
+  postgres-19-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:19-alpine
+        env:
+          POSTGRES_USER: neon_test
+          POSTGRES_PASSWORD: neon_test_password
+          POSTGRES_DB: neon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U neon_test -d neon_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NEON_REQUIRE_PG_TESTS: "1"
+      NEON_TEST_PG_URL: "postgres://neon_test:neon_test_password@127.0.0.1:5432/neon_test"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (1.100.0)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+      - name: Run PostgreSQL 19 integration tests (locked)
+        run: cargo test -p platform-db-pg --locked -- --nocapture
 
   arch-and-security-guards:
     runs-on: ubuntu-latest

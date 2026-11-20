@@ -139,6 +139,7 @@ pub fn is_unc_network_path(path: &Path) -> bool {
 }
 
 /// Network filesystem types rejected on Linux via `/proc/mounts` inspection.
+#[cfg(target_os = "linux")]
 const FORBIDDEN_NETWORK_FSTYPES: &[&str] = &[
     "nfs",
     "nfs4",

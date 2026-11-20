@@ -22,6 +22,8 @@ jobs:
         run: test -f Cargo.lock
       - name: Install pinned Rust toolchain (1.100.0)
         uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run Clippy (Standalone default features, locked)

@@ -142,7 +142,7 @@ async fn sqlite_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error:
         "mod_demo",
         1,
         "create_demo_items",
-        "CREATE TABLE IF NOT EXISTS mod_demo_items (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL);",
+        "CREATE TABLE mod_demo_items (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL);",
     )];
     let (r1, r2) = tokio::join!(
         runner.run_namespace("mod_demo", &mod_migs),
@@ -150,6 +150,42 @@ async fn sqlite_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error:
     );
     r1?;
     r2?;
+
+    // Atomic migration batch: failed second DDL must roll back table AND ledger.
+    let failing_migrations = vec![
+        MigrationSpec::new(
+            "mod_fail",
+            1,
+            "create_rollback_probe",
+            "CREATE TABLE mod_fail_rollback_probe (id INTEGER NOT NULL)",
+        ),
+        MigrationSpec::new("mod_fail", 2, "invalid_sql", "THIS IS INVALID SQLITE"),
+    ];
+    assert!(matches!(
+        runner.run_namespace("mod_fail", &failing_migrations).await,
+        Err(MigrationError::ExecutionFailed { .. })
+    ));
+    assert!(runner.list_records("mod_fail").await?.is_empty());
+    let created: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'mod_fail_rollback_probe'",
+    )
+    .fetch_one(db.reader_pool())
+    .await?
+    .try_get(0)?;
+    assert_eq!(created, 0);
+    assert!(matches!(
+        runner.run_namespace(
+            "mod_fail",
+            &[MigrationSpec::new("mod_wrong", 1, "wrong_namespace", "SELECT 1")],
+        ).await,
+        Err(MigrationError::NamespaceMismatch { .. })
+    ));
+    let mut nontransactional = MigrationSpec::new("mod_fail", 1, "non_tx", "SELECT 1");
+    nontransactional.transactional = false;
+    assert!(matches!(
+        runner.run_namespace("mod_fail", &[nontransactional]).await,
+        Err(MigrationError::NonTransactionalUnsupported { .. })
+    ));
 
     // 4. TxContext atomicity: rollback on 2nd operation error + commit on success + double-commit rejected
     let port = SqliteInsertPort;

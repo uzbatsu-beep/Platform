@@ -98,7 +98,7 @@ pub fn iso8601_to_utc_millis(raw: &str) -> Result<UtcMillis, TimestampError> {
 
     let millis: u64 = match frac_part {
         None => 0,
-        Some(frac) if !frac.is_empty() && frac.chars().all(|c| c.is_ascii_digit()) => {
+        Some(frac) if !frac.is_empty() && frac.len() <= 3 && frac.chars().all(|c| c.is_ascii_digit()) => {
             let mut normalized = frac.to_string();
             while normalized.len() < 3 {
                 normalized.push('0');
@@ -197,6 +197,8 @@ mod tests {
         );
         assert!(iso8601_to_utc_millis("2026-11-20T13:20:00+03:00").is_err());
         assert!(iso8601_to_utc_millis("2025-02-29T00:00:00.000Z").is_err());
+        // Silent truncation of sub-millisecond precision is forbidden.
+        assert!(iso8601_to_utc_millis("2026-11-20T13:20:00.1234Z").is_err());
         Ok(())
     }
 }

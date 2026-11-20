@@ -157,6 +157,46 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     r1?;
     r2?;
 
+    // Atomic migration batch: an invalid second DDL must roll back the first
+    // schema/table DDL AND both corresponding ledger records.
+    let fail_ns = format!("mod_f{}", &suffix[..8]);
+    let failing_migrations = vec![
+        MigrationSpec::new(
+            &fail_ns,
+            1,
+            "first_ddl",
+            format!("CREATE TABLE {fail_ns}.probe_rolled_back (id INTEGER NOT NULL);"),
+        ),
+        MigrationSpec::new(&fail_ns, 2, "invalid_ddl", "THIS IS NOT VALID POSTGRES SQL"),
+    ];
+    assert!(matches!(
+        runner.run_namespace(&fail_ns, &failing_migrations).await,
+        Err(MigrationError::ExecutionFailed { .. })
+    ));
+    assert!(runner.list_records(&fail_ns).await?.is_empty());
+    let rolled_back_table: bool = sqlx::query(
+        "SELECT to_regclass($1) IS NOT NULL",
+    )
+    .bind(format!("{fail_ns}.probe_rolled_back"))
+    .fetch_one(db.pool())
+    .await?
+    .try_get(0)?;
+    assert!(!rolled_back_table);
+
+    assert!(matches!(
+        runner.run_namespace(
+            &fail_ns,
+            &[MigrationSpec::new("mod_wrong", 1, "wrong_namespace", "SELECT 1")]
+        ).await,
+        Err(MigrationError::NamespaceMismatch { .. })
+    ));
+    let mut nontransactional = MigrationSpec::new(&fail_ns, 1, "non_tx", "SELECT 1");
+    nontransactional.transactional = false;
+    assert!(matches!(
+        runner.run_namespace(&fail_ns, &[nontransactional]).await,
+        Err(MigrationError::NonTransactionalUnsupported { .. })
+    ));
+
     // 5. TxContext atomicity: rollback on 2nd operation error + commit on success + double-commit rejected
     let port = PgInsertPort;
     let table = format!("{ns_a}.items");

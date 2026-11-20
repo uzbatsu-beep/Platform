@@ -5,6 +5,7 @@ use std::fmt;
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::auth::PermissionDef;
 use crate::auth::PermissionKey;
@@ -34,6 +35,8 @@ pub enum ManifestError {
     DuplicateDbNamespace(String),
     #[error("duplicate permission key '{0}'")]
     DuplicatePermission(String),
+    #[error("module '{0}' settings_schema must be a JSON Schema object")]
+    InvalidSettingsSchema(String),
     #[error(
         "module '{module_id}' declares permission '{permission}' outside its namespace prefix '{expected_prefix}'"
     )]
@@ -232,6 +235,8 @@ pub struct ModuleManifest {
     pub db_namespace: DbNamespace,
     pub api_prefix: ApiPrefix,
     pub permissions: Vec<PermissionDef>,
+    /// JSON Schema document for module settings; empty object is valid for modules without settings.
+    pub settings_schema: Value,
     pub ui_routes: Vec<UiRouteDef>,
     pub dashboard_widgets: Vec<DashboardWidgetDef>,
     pub events_published: Vec<EventContractDef>,
@@ -251,6 +256,9 @@ pub fn validate_registry(
     let mut seen_permissions: HashSet<&PermissionKey> = HashSet::new();
 
     for manifest in manifests {
+        if !manifest.settings_schema.is_object() {
+            errors.push(ManifestError::InvalidSettingsSchema(manifest.id.to_string()));
+        }
         if !manifest.core_api_compat.matches(sdk_version) {
             errors.push(ManifestError::IncompatibleCoreApi {
                 module_id: manifest.id.to_string(),

@@ -12,6 +12,8 @@ use uuid::Uuid;
 pub enum IdValidationError {
     #[error("identifier cannot be nil or max placeholder UUID")]
     NilOrPlaceholderUuid,
+    #[error("identifier must be UUIDv7")]
+    NonV7Uuid,
     #[error("invalid UUID syntax: {0}")]
     InvalidUuid(String),
     #[error("schema_version must be >= 1")]
@@ -48,6 +50,9 @@ macro_rules! define_uuid_id {
             pub fn try_from_uuid(id: Uuid) -> Result<Self, IdValidationError> {
                 if id.is_nil() || id.is_max() {
                     return Err(IdValidationError::NilOrPlaceholderUuid);
+                }
+                if id.get_version_num() != 7 {
+                    return Err(IdValidationError::NonV7Uuid);
                 }
                 Ok(Self(id))
             }

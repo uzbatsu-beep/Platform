@@ -27,6 +27,9 @@ fn ids_serialize_roundtrip_and_reject_placeholders() -> Result<(), Box<dyn std::
     let max_json = serde_json::to_string(&Uuid::max())?;
     assert!(serde_json::from_str::<EquipmentId>(&nil_json).is_err());
     assert!(serde_json::from_str::<SourceInstanceId>(&max_json).is_err());
+    // Domain identifiers must reject UUIDv4, not merely nil/max placeholders.
+    let old_uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")?;
+    assert_eq!(EquipmentId::try_from_uuid(old_uuid), Err(IdValidationError::NonV7Uuid));
 
     // SchemaVersion rejects 0
     assert_eq!(
@@ -184,6 +187,7 @@ fn sample_manifest(
             description_key: format!("permissions.{perm}"),
             allowed_scopes: vec![ScopeKind::Site, ScopeKind::Department],
         }],
+        settings_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
         ui_routes: vec![UiRouteDef {
             path: "/equipment".to_string(),
             nav_label_key: "nav.equipment".to_string(),
@@ -283,6 +287,12 @@ fn manifest_registry_validates_dag_order_and_rejects_violations()
             .any(|e| matches!(e, ManifestError::CyclicDependency(_)))
     );
 
+    // Invalid module settings_schema must fail at registry validation.
+    let mut bad_schema = eq.clone();
+    bad_schema.settings_schema = serde_json::json!(42);
+    let schema_errors = validate_registry(&[bad_schema], &sdk).err().unwrap_or_default();
+    assert!(schema_errors.iter().any(|e| matches!(e, ManifestError::InvalidSettingsSchema(_))));
+
     // Permission namespace hijacking
     let hijack = sample_manifest(
         "mod-tasks",
@@ -349,6 +359,18 @@ fn outbox_event_and_per_consumer_delivery_backoff_dlq() -> Result<(), Box<dyn st
         serde_json::json!({"status": "maintenance"}),
     );
     assert_eq!(env.delivery_semantics(), DeliverySemantics::AtLeastOnce);
+    assert_eq!(env.actor_user_id, None);
+    let user_id = UserId::generate();
+    let user_event = EventEnvelope::new(
+        "equipment.assigned",
+        SchemaVersion::V1,
+        SourceInstanceId::generate(),
+        CorrelationId::generate(),
+        ActorKind::User { user_id, employee_id: None },
+        serde_json::json!({"equipment": "test"}),
+    );
+    assert_eq!(user_event.actor_user_id, Some(user_id));
+    assert_eq!(serde_json::from_str::<EventEnvelope>(&serde_json::to_string(&user_event)?)?.actor_user_id, Some(user_id));
 
     let now = UtcMillis::now();
     let mut delivery = OutboxDeliveryRecord::new_pending(env.event_id, "mod-search", 2, now);

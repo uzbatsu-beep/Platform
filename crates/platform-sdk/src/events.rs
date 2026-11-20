@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::auth::ActorKind;
 use crate::error::AppError;
-use crate::ids::{CorrelationId, EventId, SchemaVersion, SourceInstanceId, UtcMillis};
+use crate::ids::{CorrelationId, EventId, SchemaVersion, SourceInstanceId, UserId, UtcMillis};
 use crate::ports::{BoxFuture, TxContext};
 
 /// Formal delivery guarantee of the NEON Transactional Outbox.
@@ -24,6 +24,8 @@ pub struct EventEnvelope {
     pub source_instance_id: SourceInstanceId,
     pub correlation_id: CorrelationId,
     pub actor: ActorKind,
+    /// User initiating the event; None for system actors (MODULE_SPEC.md).
+    pub actor_user_id: Option<UserId>,
     pub occurred_at: UtcMillis,
     pub payload: Value,
 }
@@ -38,6 +40,10 @@ impl EventEnvelope {
         actor: ActorKind,
         payload: Value,
     ) -> Self {
+        let actor_user_id = match &actor {
+            ActorKind::User { user_id, .. } => Some(*user_id),
+            ActorKind::System { .. } => None,
+        };
         Self {
             event_id: EventId::generate(),
             event_type: event_type.into(),
@@ -45,6 +51,7 @@ impl EventEnvelope {
             source_instance_id,
             correlation_id,
             actor,
+            actor_user_id,
             occurred_at: UtcMillis::now(),
             payload,
         }

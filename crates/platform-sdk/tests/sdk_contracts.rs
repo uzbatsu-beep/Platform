@@ -432,7 +432,7 @@ impl TransactionalCommandPort for DummyCmd {
 #[test]
 fn port_traits_support_both_standalone_and_server_tx_engines() {
     let mut pg_tx = DummyTx(TxEngine::Postgres);
-    let mut sqlite_tx = DummyTx(TxEngine::Sqlite);
+    let sqlite_tx = DummyTx(TxEngine::Sqlite);
     assert_eq!(pg_tx.engine(), TxEngine::Postgres);
     assert_eq!(sqlite_tx.engine(), TxEngine::Sqlite);
     assert!(pg_tx.as_any_mut().is::<DummyTx>());

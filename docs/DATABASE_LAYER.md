@@ -21,12 +21,15 @@
 ## 3. Конвертация временных меток (`UtcMillis`)
 - В `platform-sdk` используется `UtcMillis(u64)` (Unix milliseconds).
 - **PostgreSQL (`TIMESTAMPTZ`):** запись через `TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond')`; чтение через `((EXTRACT(EPOCH FROM col) * 1000)::numeric)::bigint` (точная целочисленная/десятичная арифметика без потерь `float8`).
-- **SQLite (`ISO-8601 TEXT`):** `platform_core::utc_millis_to_iso8601` (`YYYY-MM-DDTHH:MM:SS.sssZ`) и `iso8601_to_utc_millis` (принимает `Z` и `+00:00`, отклоняет не-UTC смещения).
+- **SQLite (`ISO-8601 TEXT`):** `platform_core::utc_millis_to_iso8601` (`YYYY-MM-DDTHH:MM:SS.sssZ`) и `iso8601_to_utc_millis` (принимает `Z` и `+00:00`, отклоняет не-UTC смещения и дробную часть точнее 3 знаков, чтобы не терять субмиллисекунды).
 
 ## 4. Протокол миграций и `ModuleRegistry`
 - Каталоги: `migrations/postgres/{core,mod_*}/` и `migrations/sqlite/{core,mod_*}/`.
 - Реестр `core_module_migrations`: `namespace`, `version`, `name`, `checksum_sha256` (FIPS 180-4 SHA-256), `applied_at`, `status` (`in_progress`/`applied`/`failed`), `error_message`.
-- Блокировка конкурентного старта: `pg_advisory_lock` (PostgreSQL) и выделенный single-writer пул (SQLite).
+- **Атомарность:** PostgreSQL применяет всю пачку SQL-миграций, создание схем и запись статусов `applied` в *одной* транзакции под `pg_advisory_xact_lock`. SQLite выполняет те же действия в одной SQLx транзакции `BEGIN IMMEDIATE` на writer-пуле. Ошибка любой миграции откатывает DDL и ledger; данные не остаются в состоянии «SQL уже применён, а статус не записан».
+- **Конкуренция и отмена:** транзакционные блокировки освобождаются при commit, rollback и отмене задачи, без риска утечки session-level `pg_advisory_lock` в pooled-соединение.
+- **Recovery:** частичные состояния `failed`/`in_progress` из старых версий runner не переисполняются автоматически: требуется диагностика и явное исправление оператором. Новые транзакционные миграции не должны оставлять таких промежуточных статусов.
+- **Границы:** несовпадение `MigrationSpec.namespace` с ожидаемым `db_namespace` вызывает ошибку. `transactional = false` пока отклоняется: нетранзакционный DDL требует отдельного протокола фиксации и восстановления (планировать отдельно, не скрывать за успешным CI).
 - Жизненный цикл `ModuleRegistry`: `Register -> Validate -> Resolve Dependencies -> Migrate -> Ready`. Модуль никогда не становится `Ready` без успешной миграции.
 
 ## 5. Запуск PostgreSQL 18/19 интеграционных тестов локально

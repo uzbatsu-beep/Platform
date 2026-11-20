@@ -308,12 +308,20 @@ impl PgMigrationRunner {
         Self { db }
     }
 
+    /// Initializes Core's migration ledger under a transaction-scoped advisory lock.
+    /// Concurrent first-start processes cannot race on CREATE SCHEMA/TABLE.
     async fn ensure_ledger(&self) -> Result<(), MigrationError> {
-        self.db
-            .ensure_schema("core")
+        let mut tx = self.db.pool().begin().await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(MIGRATION_ADVISORY_LOCK_KEY)
+            .execute(&mut *tx)
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
-
+        sqlx::query(r#"CREATE SCHEMA IF NOT EXISTS "core""#)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS core.core_module_migrations (
@@ -328,9 +336,10 @@ impl PgMigrationRunner {
             )
             "#,
         )
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| MigrationError::Database(e.to_string()))?;
+        tx.commit().await.map_err(|e| MigrationError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -393,16 +402,32 @@ impl PgMigrationRunner {
         Ok(records)
     }
 
-    /// Applies versioned migrations deterministically under a PostgreSQL session advisory lock.
+    /// Applies trusted versioned migrations with a single ACID transaction.
+    /// DDL and ledger status are committed together. A crash cannot leave DDL applied
+    /// with a stale 'in_progress' record, and the xact advisory lock cannot leak to the pool.
     pub async fn run_namespace(
         &self,
         namespace: &str,
         migrations: &[MigrationSpec],
     ) -> Result<MigrationSummary, MigrationError> {
         validate_migration_namespace(namespace)?;
-
         let mut sorted: Vec<&MigrationSpec> = migrations.iter().collect();
         sorted.sort_by_key(|m| m.version);
+        for spec in &sorted {
+            if spec.namespace != namespace {
+                return Err(MigrationError::NamespaceMismatch {
+                    version: spec.version,
+                    expected: namespace.to_string(),
+                    actual: spec.namespace.clone(),
+                });
+            }
+            if !spec.transactional {
+                return Err(MigrationError::NonTransactionalUnsupported {
+                    namespace: namespace.to_string(),
+                    version: spec.version,
+                });
+            }
+        }
         for pair in sorted.windows(2) {
             if pair[0].version == pair[1].version {
                 return Err(MigrationError::DuplicateVersion {
@@ -412,45 +437,22 @@ impl PgMigrationRunner {
             }
         }
 
-        // Acquire migration advisory lock BEFORE creating any schema or migration ledger.
-        // PostgreSQL CREATE SCHEMA IF NOT EXISTS is not race-safe across concurrent sessions.
-        // The runner reserves at least two pooled connections: one for the advisory lock,
-        // another for ledger and transactional DDL.
-        let mut lock_conn = self
-            .db
-            .pool()
-            .acquire()
-            .await
+        self.ensure_ledger().await?;
+        let mut tx = self.db.pool().begin().await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
-        sqlx::query("SELECT pg_advisory_lock($1)")
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(MIGRATION_ADVISORY_LOCK_KEY)
-            .execute(&mut *lock_conn)
+            .execute(&mut *tx)
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-        let result = async {
-            self.ensure_ledger().await?;
-            self.db
-                .ensure_schema(namespace)
-                .await
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
-            self.run_locked(namespace, &sorted).await
-        }
-        .await;
+        // Module schema creation is protected by the same transaction-level lock.
+        let schema_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{namespace}""#);
+        sqlx::query(AssertSqlSafe(schema_sql))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-            .bind(MIGRATION_ADVISORY_LOCK_KEY)
-            .execute(&mut *lock_conn)
-            .await;
-
-        result
-    }
-
-    async fn run_locked(
-        &self,
-        namespace: &str,
-        sorted: &[&MigrationSpec],
-    ) -> Result<MigrationSummary, MigrationError> {
         let mut summary = MigrationSummary {
             namespace: namespace.to_string(),
             ..MigrationSummary::default()
@@ -458,23 +460,23 @@ impl PgMigrationRunner {
 
         for spec in sorted {
             let checksum = spec.checksum_sha256();
+            let version = i32::try_from(spec.version).map_err(|_| {
+                MigrationError::Database(format!("migration version {} exceeds PostgreSQL INTEGER", spec.version))
+            })?;
             let existing = sqlx::query(
                 "SELECT checksum_sha256, status FROM core.core_module_migrations WHERE namespace = $1 AND version = $2",
             )
             .bind(namespace)
-            .bind(spec.version as i32)
-            .fetch_optional(self.db.pool())
+            .bind(version)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
             if let Some(row) = existing {
-                let stored_checksum: String = row
-                    .try_get("checksum_sha256")
+                let stored_checksum: String = row.try_get("checksum_sha256")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let status: String = row
-                    .try_get("status")
+                let status: String = row.try_get("status")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-
                 if status == MigrationStatus::Applied.as_str() {
                     if stored_checksum != checksum {
                         return Err(MigrationError::ChecksumMismatch {
@@ -487,85 +489,40 @@ impl PgMigrationRunner {
                     summary.skipped_versions.push(spec.version);
                     continue;
                 }
-                // Recover previously interrupted `in_progress` or `failed` migration under advisory lock.
-                summary.recovered_versions.push(spec.version);
+                // Pre-ACID incomplete states require operator attention, not unsafe replay.
+                return Err(MigrationError::Database(format!(
+                    "migration {namespace} v{} is in state {status}; explicit repair required",
+                    spec.version
+                )));
             }
 
+            sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
+                .execute(&mut *tx)
+                .await
+                .map_err(|err| MigrationError::ExecutionFailed {
+                    namespace: namespace.to_string(),
+                    version: spec.version,
+                    name: spec.name.clone(),
+                    detail: err.to_string(),
+                })?;
+
             sqlx::query(
-                r#"
-                INSERT INTO core.core_module_migrations (namespace, version, name, checksum_sha256, status, error_message)
-                VALUES ($1, $2, $3, $4, 'in_progress', NULL)
-                ON CONFLICT (namespace, version)
-                DO UPDATE SET name = EXCLUDED.name, checksum_sha256 = EXCLUDED.checksum_sha256,
-                              status = 'in_progress', error_message = NULL, applied_at = NOW()
-                "#,
+                "INSERT INTO core.core_module_migrations (namespace, version, name, checksum_sha256, status, error_message) VALUES ($1, $2, $3, $4, 'applied', NULL)",
             )
             .bind(namespace)
-            .bind(spec.version as i32)
+            .bind(version)
             .bind(&spec.name)
             .bind(&checksum)
-            .execute(self.db.pool())
+            .execute(&mut *tx)
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-            let exec_result = if spec.transactional {
-                let mut tx = self
-                    .db
-                    .pool()
-                    .begin()
-                    .await
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let res = sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
-                    .execute(&mut *tx)
-                    .await;
-                match res {
-                    Ok(_) => tx.commit().await,
-                    Err(err) => {
-                        let _ = tx.rollback().await;
-                        Err(err)
-                    }
-                }
-            } else {
-                sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
-                    .execute(self.db.pool())
-                    .await
-                    .map(|_| ())
-            };
-
-            match exec_result {
-                Ok(()) => {
-                    sqlx::query(
-                        "UPDATE core.core_module_migrations SET status = 'applied', applied_at = NOW(), error_message = NULL WHERE namespace = $1 AND version = $2",
-                    )
-                    .bind(namespace)
-                    .bind(spec.version as i32)
-                    .execute(self.db.pool())
-                    .await
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
-                    summary.applied_versions.push(spec.version);
-                }
-                Err(err) => {
-                    let msg = err.to_string();
-                    let _ = sqlx::query(
-                        "UPDATE core.core_module_migrations SET status = 'failed', error_message = $3 WHERE namespace = $1 AND version = $2",
-                    )
-                    .bind(namespace)
-                    .bind(spec.version as i32)
-                    .bind(&msg)
-                    .execute(self.db.pool())
-                    .await;
-                    return Err(MigrationError::ExecutionFailed {
-                        namespace: namespace.to_string(),
-                        version: spec.version,
-                        name: spec.name.clone(),
-                        detail: msg,
-                    });
-                }
-            }
+            summary.applied_versions.push(spec.version);
         }
-
+        tx.commit().await.map_err(|e| MigrationError::Database(e.to_string()))?;
         Ok(summary)
     }
+
 }
 
 impl ModuleMigrator for PgMigrationRunner {

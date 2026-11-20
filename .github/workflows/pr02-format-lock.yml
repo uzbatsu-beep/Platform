@@ -1,0 +1,40 @@
+name: PR-02 SDK format and lock update (temporary)
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: neon-pr02-format-lock
+  cancel-in-progress: true
+
+jobs:
+  format-and-lock:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'pr/02-platform-sdk'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.100.0'
+      - name: Resolve local workspace dependency edges
+        run: cargo metadata --format-version 1 > /dev/null
+      - name: Format Rust sources using the pinned toolchain
+        run: cargo fmt --all
+      - name: Commit only SDK formatting and Cargo.lock to this PR branch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock crates/platform-sdk/
+          if git diff --cached --quiet; then
+            echo "No formatting or lock changes required"
+          else
+            git commit -m "style(pr-02): rustfmt SDK and synchronize locked deps"
+            git push origin HEAD:pr/02-platform-sdk
+          fi

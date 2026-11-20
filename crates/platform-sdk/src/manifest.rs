@@ -18,7 +18,9 @@ pub enum ManifestError {
     InvalidDbNamespace(String),
     #[error("invalid api_prefix '{0}': must start with '/api/v1/' and have no trailing slash")]
     InvalidApiPrefix(String),
-    #[error("module '{module_id}' core_api_compat '{compat}' is incompatible with SDK {sdk_version}")]
+    #[error(
+        "module '{module_id}' core_api_compat '{compat}' is incompatible with SDK {sdk_version}"
+    )]
     IncompatibleCoreApi {
         module_id: String,
         compat: String,
@@ -32,7 +34,9 @@ pub enum ManifestError {
     DuplicateDbNamespace(String),
     #[error("duplicate permission key '{0}'")]
     DuplicatePermission(String),
-    #[error("module '{module_id}' declares permission '{permission}' outside its namespace prefix '{expected_prefix}'")]
+    #[error(
+        "module '{module_id}' declares permission '{permission}' outside its namespace prefix '{expected_prefix}'"
+    )]
     PermissionNamespaceMismatch {
         module_id: String,
         permission: String,
@@ -43,7 +47,9 @@ pub enum ManifestError {
         module_id: String,
         dependency: String,
     },
-    #[error("module '{module_id}' dependency '{dependency}' version {actual} does not satisfy '{required}'")]
+    #[error(
+        "module '{module_id}' dependency '{dependency}' version {actual} does not satisfy '{required}'"
+    )]
     IncompatibleDependencyVersion {
         module_id: String,
         dependency: String,

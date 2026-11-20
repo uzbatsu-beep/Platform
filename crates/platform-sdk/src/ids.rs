@@ -4,8 +4,8 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::str::FromStr;
 
-use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -31,7 +31,9 @@ pub enum IdValidationError {
 macro_rules! define_uuid_id {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
         #[serde(try_from = "Uuid", into = "Uuid")]
         pub struct $name(Uuid);
 
@@ -88,19 +90,46 @@ macro_rules! define_uuid_id {
     };
 }
 
-define_uuid_id!(OrganizationId, "Unique identifier of an Organization (Core).");
+define_uuid_id!(
+    OrganizationId,
+    "Unique identifier of an Organization (Core)."
+);
 define_uuid_id!(SiteId, "Unique identifier of a Site / plant (Core).");
-define_uuid_id!(DepartmentId, "Unique identifier of a Department / workshop (Core).");
-define_uuid_id!(LocationId, "Unique identifier of a physical Location (Core).");
-define_uuid_id!(UserId, "Unique identifier of an authentication User (Core Identity).");
+define_uuid_id!(
+    DepartmentId,
+    "Unique identifier of a Department / workshop (Core)."
+);
+define_uuid_id!(
+    LocationId,
+    "Unique identifier of a physical Location (Core)."
+);
+define_uuid_id!(
+    UserId,
+    "Unique identifier of an authentication User (Core Identity)."
+);
 define_uuid_id!(RoleId, "Unique identifier of an RBAC Role (Core).");
-define_uuid_id!(EmployeeId, "External reference ID of an Employee owned exclusively by mod-hr-org.");
-define_uuid_id!(DocumentId, "Unique identifier of a Document / attachment record (Core).");
-define_uuid_id!(EquipmentId, "Unique identifier of an Equipment asset (mod-equipment).");
-define_uuid_id!(EquipmentComponentId, "Unique identifier of an EquipmentComponent node (mod-equipment).");
+define_uuid_id!(
+    EmployeeId,
+    "External reference ID of an Employee owned exclusively by mod-hr-org."
+);
+define_uuid_id!(
+    DocumentId,
+    "Unique identifier of a Document / attachment record (Core)."
+);
+define_uuid_id!(
+    EquipmentId,
+    "Unique identifier of an Equipment asset (mod-equipment)."
+);
+define_uuid_id!(
+    EquipmentComponentId,
+    "Unique identifier of an EquipmentComponent node (mod-equipment)."
+);
 define_uuid_id!(EventId, "Unique identifier of a published DomainEvent.");
 define_uuid_id!(CorrelationId, "Request / workflow correlation identifier.");
-define_uuid_id!(SourceInstanceId, "Unique identifier of a NEON deployment instance generated once at init.");
+define_uuid_id!(
+    SourceInstanceId,
+    "Unique identifier of a NEON deployment instance generated once at init."
+);
 
 /// Non-zero schema version attached to entities and events for forward-compatible export/import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -234,14 +263,19 @@ pub struct UtcMillis(u64);
 
 impl UtcMillis {
     #[must_use]
-    pub const fn from_unix_millis(value: u64) -> Self { Self(value) }
+    pub const fn from_unix_millis(value: u64) -> Self {
+        Self(value)
+    }
 
     #[must_use]
-    pub const fn as_unix_millis(&self) -> u64 { self.0 }
+    pub const fn as_unix_millis(&self) -> u64 {
+        self.0
+    }
 
     #[must_use]
     pub fn now() -> Self {
-        let millis = SystemTime::now().duration_since(UNIX_EPOCH)
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or_default();
         Self(u64::try_from(millis).unwrap_or(u64::MAX))

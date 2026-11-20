@@ -135,11 +135,18 @@ impl Scope {
     pub fn covers(&self, target: &Self) -> bool {
         match (self, target) {
             (Self::Global, _) => true,
-            (Self::Site { site_id: grant_site }, Self::Site { site_id: target_site }) => {
-                grant_site == target_site
-            }
             (
-                Self::Site { site_id: grant_site },
+                Self::Site {
+                    site_id: grant_site,
+                },
+                Self::Site {
+                    site_id: target_site,
+                },
+            ) => grant_site == target_site,
+            (
+                Self::Site {
+                    site_id: grant_site,
+                },
                 Self::Department {
                     site_id: target_site,
                     ..
@@ -199,7 +206,11 @@ impl AuthContext {
 
     /// Enforces server-side RBAC + scope check, distinguishing missing permission (`RbacForbidden`)
     /// from out-of-scope access (`RbacScopeDenied`).
-    pub fn require_permission(&self, key: &PermissionKey, target_scope: &Scope) -> Result<(), AppError> {
+    pub fn require_permission(
+        &self,
+        key: &PermissionKey,
+        target_scope: &Scope,
+    ) -> Result<(), AppError> {
         let mut has_key_anywhere = false;
         for grant in &self.grants {
             if &grant.permission == key {

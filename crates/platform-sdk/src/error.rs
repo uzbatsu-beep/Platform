@@ -115,7 +115,10 @@ impl AppError {
 
     /// HTTP `412 Precondition Failed`: strictly for failed HTTP `If-Match` / `ETag` preconditions (ADR-011).
     #[must_use]
-    pub fn precondition_failed(detail: impl Into<String>, current_version: Option<RowVersion>) -> Self {
+    pub fn precondition_failed(
+        detail: impl Into<String>,
+        current_version: Option<RowVersion>,
+    ) -> Self {
         Self {
             status: 412,
             code: ErrorCode::OptimisticLockPreconditionFailed,
@@ -202,7 +205,10 @@ impl AppError {
     #[must_use]
     pub fn to_problem_details(&self, request_id: Option<CorrelationId>) -> ProblemDetails {
         ProblemDetails {
-            problem_type: format!("https://platform.internal/errors/{}", self.code.problem_slug()),
+            problem_type: format!(
+                "https://platform.internal/errors/{}",
+                self.code.problem_slug()
+            ),
             title: self.code.default_title().to_string(),
             status: self.status,
             code: self.code,

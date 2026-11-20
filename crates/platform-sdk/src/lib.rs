@@ -11,7 +11,9 @@ pub mod ids;
 pub mod manifest;
 pub mod ports;
 
-pub use auth::{ActorKind, AuthContext, PermissionDef, PermissionGrant, PermissionKey, Scope, ScopeKind};
+pub use auth::{
+    ActorKind, AuthContext, PermissionDef, PermissionGrant, PermissionKey, Scope, ScopeKind,
+};
 pub use error::{AppError, ErrorCode, ProblemDetails};
 pub use events::{
     DeliverySemantics, DeliveryStatus, EventEnvelope, OutboxDeliveryRecord, OutboxWriter,

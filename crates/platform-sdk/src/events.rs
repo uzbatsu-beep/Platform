@@ -117,7 +117,12 @@ impl OutboxDeliveryRecord {
     }
 
     /// Records a failed consumer attempt, scheduling exponential backoff or transitioning to DLQ.
-    pub fn record_failure(&mut self, error: impl Into<String>, now: UtcMillis, base_backoff_secs: i64) {
+    pub fn record_failure(
+        &mut self,
+        error: impl Into<String>,
+        now: UtcMillis,
+        base_backoff_secs: i64,
+    ) {
         self.attempts = self.attempts.saturating_add(1);
         self.leased_until = None;
         self.lease_owner = None;
@@ -127,7 +132,9 @@ impl OutboxDeliveryRecord {
         } else {
             self.status = DeliveryStatus::Pending;
             let shift = self.attempts.saturating_sub(1).min(10);
-            let delay_secs = u64::try_from(base_backoff_secs.max(1)).unwrap_or(1).saturating_mul(1_u64 << shift);
+            let delay_secs = u64::try_from(base_backoff_secs.max(1))
+                .unwrap_or(1)
+                .saturating_mul(1_u64 << shift);
             self.next_attempt_at = now.add_seconds(delay_secs);
         }
     }

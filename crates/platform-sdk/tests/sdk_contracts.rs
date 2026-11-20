@@ -9,8 +9,8 @@ use platform_sdk::{
     EntityMetadata, EquipmentId, ErrorCode, EventContractDef, EventEnvelope, EventId,
     IdValidationError, IdempotencyKey, ManifestError, ModuleDependency, ModuleId, ModuleManifest,
     OutboxDeliveryRecord, PermissionDef, PermissionGrant, PermissionKey, QueryPort, RowVersion,
-    SchemaVersion, Scope, ScopeKind, SiteId, SourceInstanceId, TransactionalCommandPort,
-    TxContext, TxEngine, UiRouteDef, UserId, UtcMillis, sdk_semver, validate_registry,
+    SchemaVersion, Scope, ScopeKind, SiteId, SourceInstanceId, TransactionalCommandPort, TxContext,
+    TxEngine, UiRouteDef, UserId, UtcMillis, sdk_semver, validate_registry,
 };
 use semver::{Version, VersionReq};
 use uuid::Uuid;
@@ -29,7 +29,10 @@ fn ids_serialize_roundtrip_and_reject_placeholders() -> Result<(), Box<dyn std::
     assert!(serde_json::from_str::<SourceInstanceId>(&max_json).is_err());
 
     // SchemaVersion rejects 0
-    assert_eq!(SchemaVersion::new(0), Err(IdValidationError::ZeroSchemaVersion));
+    assert_eq!(
+        SchemaVersion::new(0),
+        Err(IdValidationError::ZeroSchemaVersion)
+    );
     assert_eq!(SchemaVersion::V1.get(), 1);
 
     // RowVersion ETag round-trip (strong & weak) and overflow safety
@@ -44,14 +47,19 @@ fn ids_serialize_roundtrip_and_reject_placeholders() -> Result<(), Box<dyn std::
     );
 
     // IdempotencyKey validation
-    assert_eq!(IdempotencyKey::new("   "), Err(IdValidationError::EmptyIdempotencyKey));
+    assert_eq!(
+        IdempotencyKey::new("   "),
+        Err(IdValidationError::EmptyIdempotencyKey)
+    );
     assert_eq!(
         IdempotencyKey::new("a".repeat(129)),
         Err(IdValidationError::IdempotencyKeyTooLong)
     );
     assert_eq!(
-        IdempotencyKey::new("bad
-key"),
+        IdempotencyKey::new(
+            "bad
+key"
+        ),
         Err(IdValidationError::InvalidIdempotencyKeyChars)
     );
     let key = IdempotencyKey::new("  req-001  ")?;
@@ -109,22 +117,49 @@ fn rbac_scope_containment_and_error_distinction() -> Result<(), Box<dyn std::err
     };
 
     // Site grant covers departments within the same site, but not another site
-    assert!(ctx.has_permission(&read_perm, &Scope::Department { site_id: site_a, department_id: dept_a2 }));
+    assert!(ctx.has_permission(
+        &read_perm,
+        &Scope::Department {
+            site_id: site_a,
+            department_id: dept_a2
+        }
+    ));
     assert!(!ctx.has_permission(&read_perm, &Scope::Site { site_id: site_b }));
 
     // Department write grant allows dept_a1, denies dept_a2 with RbacScopeDenied (403)
-    assert!(ctx.require_permission(&write_perm, &Scope::Department { site_id: site_a, department_id: dept_a1 }).is_ok());
+    assert!(
+        ctx.require_permission(
+            &write_perm,
+            &Scope::Department {
+                site_id: site_a,
+                department_id: dept_a1
+            }
+        )
+        .is_ok()
+    );
     let scope_err = ctx
-        .require_permission(&write_perm, &Scope::Department { site_id: site_a, department_id: dept_a2 })
+        .require_permission(
+            &write_perm,
+            &Scope::Department {
+                site_id: site_a,
+                department_id: dept_a2,
+            },
+        )
         .err();
-    assert_eq!(scope_err.as_ref().map(AppError::code), Some(ErrorCode::RbacScopeDenied));
+    assert_eq!(
+        scope_err.as_ref().map(AppError::code),
+        Some(ErrorCode::RbacScopeDenied)
+    );
 
     // Missing permission completely yields RbacForbidden (403)
     let archive_perm = PermissionKey::parse("equipment:asset:archive")?;
     let forb_err = ctx
         .require_permission(&archive_perm, &Scope::Own { user_id: user_2 })
         .err();
-    assert_eq!(forb_err.as_ref().map(AppError::code), Some(ErrorCode::RbacForbidden));
+    assert_eq!(
+        forb_err.as_ref().map(AppError::code),
+        Some(ErrorCode::RbacForbidden)
+    );
     Ok(())
 }
 
@@ -168,7 +203,8 @@ fn sample_manifest(
 }
 
 #[test]
-fn manifest_registry_validates_dag_order_and_rejects_violations() -> Result<(), Box<dyn std::error::Error>> {
+fn manifest_registry_validates_dag_order_and_rejects_violations()
+-> Result<(), Box<dyn std::error::Error>> {
     let sdk = sdk_semver()?;
     let eq = sample_manifest(
         "mod-equipment",
@@ -205,8 +241,13 @@ fn manifest_registry_validates_dag_order_and_rejects_violations() -> Result<(), 
         vec![],
         "legacy:item:read",
     )?;
-    let errs = validate_registry(&[bad_compat], &sdk).err().unwrap_or_default();
-    assert!(errs.iter().any(|e| matches!(e, ManifestError::IncompatibleCoreApi { .. })));
+    let errs = validate_registry(&[bad_compat], &sdk)
+        .err()
+        .unwrap_or_default();
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ManifestError::IncompatibleCoreApi { .. }))
+    );
 
     // Cyclic dependency A <-> B
     let cyc_a = sample_manifest(
@@ -233,8 +274,14 @@ fn manifest_registry_validates_dag_order_and_rejects_violations() -> Result<(), 
         }],
         "beta:item:read",
     )?;
-    let cyc_errs = validate_registry(&[cyc_a, cyc_b], &sdk).err().unwrap_or_default();
-    assert!(cyc_errs.iter().any(|e| matches!(e, ManifestError::CyclicDependency(_))));
+    let cyc_errs = validate_registry(&[cyc_a, cyc_b], &sdk)
+        .err()
+        .unwrap_or_default();
+    assert!(
+        cyc_errs
+            .iter()
+            .any(|e| matches!(e, ManifestError::CyclicDependency(_)))
+    );
 
     // Permission namespace hijacking
     let hijack = sample_manifest(
@@ -246,7 +293,11 @@ fn manifest_registry_validates_dag_order_and_rejects_violations() -> Result<(), 
         "equipment:asset:write",
     )?;
     let hijack_errs = validate_registry(&[hijack], &sdk).err().unwrap_or_default();
-    assert!(hijack_errs.iter().any(|e| matches!(e, ManifestError::PermissionNamespaceMismatch { .. })));
+    assert!(
+        hijack_errs
+            .iter()
+            .any(|e| matches!(e, ManifestError::PermissionNamespaceMismatch { .. }))
+    );
     Ok(())
 }
 

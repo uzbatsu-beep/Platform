@@ -6,11 +6,13 @@
 - **Python 3.11+:** для локального запуска скриптов проверок и их тестов.
 - **SQLite:** системная установка не требуется — статически слинкован `libsqlite3-sys = "=0.39.1"` (`bundled`, SQLite **3.54.1**, закрывает `RUSTSEC-2026-0459`; `bundled-sqlcipher` не используется).
 
-## 1. Генерация настоящих lock-файлов
+## 1. Использование закоммиченных lock-файлов
+`Cargo.lock` и `frontend/pnpm-lock.yaml` уже входят в репозиторий. При обычной разработке их **не регенерировать**.
 ```bash
-cargo generate-lockfile
-cd frontend && pnpm install --lockfile-only
+cargo fetch --locked
+cd frontend && pnpm install --frozen-lockfile
 ```
+Обновление зависимостей выполнять отдельным PR с повторной проверкой лицензий и advisories.
 
 ## 2. Проверка Backend (locked)
 ```bash

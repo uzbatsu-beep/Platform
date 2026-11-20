@@ -19,7 +19,7 @@ use platform_core::{
 };
 use platform_sdk::{BoxFuture, TxContext, TxEngine, UtcMillis};
 use sqlx::{
-    Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
+    AssertSqlSafe, Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
@@ -612,7 +612,9 @@ impl SqliteMigrationRunner {
                     .begin()
                     .await
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let res = tx.execute(spec.sql.as_str()).await;
+                let res = sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
+                    .execute(&mut *tx)
+                    .await;
                 match res {
                     Ok(_) => tx.commit().await,
                     Err(err) => {
@@ -621,9 +623,8 @@ impl SqliteMigrationRunner {
                     }
                 }
             } else {
-                self.db
-                    .writer_pool()
-                    .execute(spec.sql.as_str())
+                sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
+                    .execute(self.db.writer_pool())
                     .await
                     .map(|_| ())
             };

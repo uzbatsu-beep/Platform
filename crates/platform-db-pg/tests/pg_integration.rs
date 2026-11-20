@@ -12,7 +12,7 @@ use platform_sdk::{
     UserId, UtcMillis,
 };
 use semver::{Version, VersionReq};
-use sqlx::Row;
+use sqlx::{AssertSqlSafe, Row};
 
 fn test_pg_url() -> Result<Option<String>, String> {
     let required = std::env::var("NEON_REQUIRE_PG_TESTS").unwrap_or_default() == "1";
@@ -49,7 +49,7 @@ impl TransactionalCommandPort for PgInsertPort {
                 .connection_mut()
                 .map_err(|e| AppError::internal(e.to_string()))?;
             let sql = format!("INSERT INTO {} (label) VALUES ($1)", cmd.payload.table);
-            sqlx::query(&sql)
+            sqlx::query(AssertSqlSafe(sql))
                 .bind(&cmd.payload.label)
                 .execute(conn)
                 .await
@@ -195,7 +195,7 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
         assert!(second.is_err());
         tx.rollback().await?;
     }
-    let count_after_rb: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM {table}"))
+    let count_after_rb: i64 = sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
         .fetch_one(db.pool())
         .await?
         .try_get(0)?;
@@ -222,7 +222,7 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
         tx.commit().await?;
         assert!(tx.commit().await.is_err());
     }
-    let count_after_commit: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM {table}"))
+    let count_after_commit: i64 = sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
         .fetch_one(db.pool())
         .await?
         .try_get(0)?;
@@ -256,7 +256,7 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     // 7. Stop & restart cleanly
     db.close().await;
     let db_restarted = PgDatabase::connect_url(&url, 4).await?;
-    let count_after_restart: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM {table}"))
+    let count_after_restart: i64 = sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
         .fetch_one(db_restarted.pool())
         .await?
         .try_get(0)?;

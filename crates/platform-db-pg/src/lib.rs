@@ -14,7 +14,7 @@ use platform_core::{
 };
 use platform_sdk::{BoxFuture, TxContext, TxEngine, UtcMillis};
 use sqlx::{
-    Executor, PgConnection, PgPool, Postgres, Row, Transaction,
+    AssertSqlSafe, Executor, PgConnection, PgPool, Postgres, Row, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
 };
 
@@ -269,7 +269,7 @@ impl PgDatabase {
         validate_migration_namespace(namespace)
             .map_err(|_| PgDbError::InvalidSchemaIdentifier(namespace.to_string()))?;
         let sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{namespace}""#);
-        sqlx::query(&sql)
+        sqlx::query(AssertSqlSafe(sql))
             .execute(&self.pool)
             .await
             .map_err(|e| sanitize_sqlx_error(&e))?;
@@ -510,7 +510,9 @@ impl PgMigrationRunner {
                     .begin()
                     .await
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let res = tx.execute(spec.sql.as_str()).await;
+                let res = sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
+                    .execute(&mut *tx)
+                    .await;
                 match res {
                     Ok(_) => tx.commit().await,
                     Err(err) => {
@@ -519,7 +521,10 @@ impl PgMigrationRunner {
                     }
                 }
             } else {
-                self.db.pool().execute(spec.sql.as_str()).await.map(|_| ())
+                sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
+                    .execute(self.db.pool())
+                    .await
+                    .map(|_| ())
             };
 
             match exec_result {

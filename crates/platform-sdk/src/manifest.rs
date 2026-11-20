@@ -299,17 +299,15 @@ pub fn validate_registry(
                         dependency: dep.module_id.to_string(),
                     });
                 }
-                Some(target) => {
-                    if !dep.version_req.matches(&target.version) {
-                        errors.push(ManifestError::IncompatibleDependencyVersion {
-                            module_id: manifest.id.to_string(),
-                            dependency: dep.module_id.to_string(),
-                            actual: target.version.to_string(),
-                            required: dep.version_req.to_string(),
-                        });
-                    }
+                Some(target) if !dep.version_req.matches(&target.version) => {
+                    errors.push(ManifestError::IncompatibleDependencyVersion {
+                        module_id: manifest.id.to_string(),
+                        dependency: dep.module_id.to_string(),
+                        actual: target.version.to_string(),
+                        required: dep.version_req.to_string(),
+                    });
                 }
-                None => {}
+                Some(_) | None => {}
             }
         }
     }

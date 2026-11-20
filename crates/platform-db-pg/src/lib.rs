@@ -193,7 +193,7 @@ impl PgDatabase {
     pub async fn connect(config: &PgConfig) -> Result<Self, PgDbError> {
         let opts = config.to_connect_options();
         let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections.max(1))
+            .max_connections(config.max_connections.max(2))
             .min_connections(config.min_connections)
             .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs.max(1)))
             .connect_with(opts)
@@ -205,7 +205,7 @@ impl PgDatabase {
     /// Connects using a PostgreSQL URL (e.g., `NEON_TEST_PG_URL` in CI) and verifies server version >= 18.
     pub async fn connect_url(url: &str, max_connections: u32) -> Result<Self, PgDbError> {
         let pool = PgPoolOptions::new()
-            .max_connections(max_connections.max(1))
+            .max_connections(max_connections.max(2))
             .acquire_timeout(Duration::from_secs(10))
             .connect(url)
             .await
@@ -412,13 +412,10 @@ impl PgMigrationRunner {
             }
         }
 
-        self.ensure_ledger().await?;
-        self.db
-            .ensure_schema(namespace)
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
-
-        // Acquire dedicated connection for session-level advisory lock to prevent concurrent double-apply.
+        // Acquire migration advisory lock BEFORE creating any schema or migration ledger.
+        // PostgreSQL CREATE SCHEMA IF NOT EXISTS is not race-safe across concurrent sessions.
+        // The runner reserves at least two pooled connections: one for the advisory lock,
+        // another for ledger and transactional DDL.
         let mut lock_conn = self
             .db
             .pool()
@@ -431,7 +428,15 @@ impl PgMigrationRunner {
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-        let result = self.run_locked(namespace, &sorted).await;
+        let result = async {
+            self.ensure_ledger().await?;
+            self.db
+                .ensure_schema(namespace)
+                .await
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            self.run_locked(namespace, &sorted).await
+        }
+        .await;
 
         let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
             .bind(MIGRATION_ADVISORY_LOCK_KEY)

@@ -1,50 +1,48 @@
-name: Bootstrap lockfiles (PR-01 only)
+name: Bootstrap lockfiles (PR-01 temporary)
 
 on:
   pull_request:
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: neon-pr01-lockfiles
+  cancel-in-progress: true
 
 jobs:
-  cargo-lock:
+  generate-and-commit-lockfiles:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'pr/01-workspace-bootstrap'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install pinned Rust toolchain
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - name: Install pinned Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.100.0"
-      - name: Generate real Cargo.lock (no publication)
-        run: cargo generate-lockfile
-      - name: Verify generated Cargo.lock is usable
-        run: cargo metadata --format-version 1 --locked --no-deps > /dev/null
-      - name: Upload Cargo.lock artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: neon-pr01-cargo-lock
-          path: Cargo.lock
-          if-no-files-found: error
-          retention-days: 14
-
-  pnpm-lock:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
           version: 10.6.0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.12.0
-      - name: Generate real pnpm-lock.yaml (ignore install scripts)
+      - name: Generate real Cargo.lock
+        run: cargo generate-lockfile
+      - name: Generate real pnpm-lock.yaml
         working-directory: frontend
         run: pnpm install --lockfile-only --ignore-scripts
-      - name: Upload pnpm-lock.yaml artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: neon-pr01-pnpm-lock
-          path: frontend/pnpm-lock.yaml
-          if-no-files-found: error
-          retention-days: 14
+      - name: Commit lockfiles to PR branch only
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock frontend/pnpm-lock.yaml
+          if git diff --cached --quiet; then
+            echo "Lockfiles already committed"
+          else
+            git commit -m "chore(pr-01): commit resolved Rust and frontend lockfiles"
+            git push origin HEAD:pr/01-workspace-bootstrap
+          fi

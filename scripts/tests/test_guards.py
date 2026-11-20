@@ -62,6 +62,50 @@ class AirgappedGuardTests(unittest.TestCase):
                 self.assertEqual(len(errors), 1)
 
 
+    def test_compiled_framework_metadata_does_not_imply_external_asset_requests(self) -> None:
+        self.assertEqual(
+            airgap.scan_text(
+                'throw Error("Minified React error; visit https://react.dev/errors/")',
+                "frontend/dist/assets/index.js",
+            ),
+            [],
+        )
+        self.assertEqual(
+            airgap.scan_text(
+                "/*! tailwindcss v4.2.2 | MIT License | https://tailwindcss.com */",
+                "frontend/dist/assets/index.css",
+            ),
+            [],
+        )
+        self.assertEqual(
+            airgap.scan_text(
+                'const ns = "http://www.w3.org/1998/Math/MathML";',
+                "frontend/dist/assets/index.js",
+            ),
+            [],
+        )
+
+    def test_compiled_asset_urls_still_reject_external_requests(self) -> None:
+        self.assertEqual(
+            len(
+                airgap.scan_text(
+                    'fetch("https://cdn.example.com/runtime-config.json")',
+                    "frontend/dist/assets/index.js",
+                )
+            ),
+            1,
+        )
+        self.assertEqual(
+            len(
+                airgap.scan_text(
+                    '<script src="https://react.dev/errors/"></script>',
+                    "frontend/index.html",
+                )
+            ),
+            1,
+        )
+
+
 class ArchBoundaryGuardTests(unittest.TestCase):
     def test_rejects_forbidden_dev_build_target_and_renamed_package_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

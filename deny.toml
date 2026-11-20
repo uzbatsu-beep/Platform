@@ -24,6 +24,10 @@ allow = [
     "CC0-1.0",
 ]
 
+# Mozilla CA root certificate data in webpki-roots is under CDLA-Permissive-2.0.
+# Scope the exception to this specific dependency rather than broadening all licenses.
+exceptions = [{ allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" }]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

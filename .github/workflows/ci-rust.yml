@@ -1,0 +1,51 @@
+name: CI Rust (PR-01 Foundation Bootstrap)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-quality-and-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Cargo.lock is committed
+        shell: bash
+        run: test -f Cargo.lock
+      - name: Install pinned Rust toolchain (1.100.0)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy (Standalone default features, locked)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check Server feature profile (PostgreSQL adapter, locked)
+        run: cargo check -p platform-server --no-default-features --features server --locked
+      - name: Check Standalone feature profile (SQLite 3.54.1 bundled, locked)
+        run: cargo check -p platform-server --no-default-features --features standalone --locked
+      - name: Run workspace unit & SQLite runtime (version/FTS5/WAL) tests
+        run: cargo test --workspace --locked
+
+  arch-and-security-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run guard script unit & negative tests
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Architecture boundary check (all sections + renamed deps)
+        run: python3 scripts/check_arch_boundaries.py
+      - name: Air-gapped frontend source check
+        run: python3 scripts/check_airgapped_assets.py --target frontend/src --include-index
+      - name: Frontend Vite 8 plugin compatibility check
+        run: python3 scripts/check_frontend_compat.py
+      - name: Security audit (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@v2

@@ -1,0 +1,40 @@
+name: CI Frontend (PR-01 Foundation Bootstrap)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  frontend-build-and-airgap:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify frontend/pnpm-lock.yaml is committed
+        shell: bash
+        run: test -f frontend/pnpm-lock.yaml
+      - name: Check Vite 8 / plugin-react / tailwindcss / vitest compatibility
+        run: python3 scripts/check_frontend_compat.py
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install dependencies (strict frozen lockfile)
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: TypeScript typecheck
+        working-directory: frontend
+        run: pnpm typecheck
+      - name: Build production SPA bundle
+        working-directory: frontend
+        run: pnpm build
+      - name: Verify built dist/ is 100% air-gapped
+        run: python3 scripts/check_airgapped_assets.py --target frontend/dist

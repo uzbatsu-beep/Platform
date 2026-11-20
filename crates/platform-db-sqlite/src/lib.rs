@@ -3,8 +3,11 @@
 //! Enforces WAL mode, FTS5 availability, local filesystem guard (rejecting UNC/network paths),
 //! and `synchronous = FULL` by default (ADR-002, ADR-011).
 
+use sqlx::{
+    Row,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+};
 use std::path::Path;
-use sqlx::{Row, sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous}};
 
 /// Expected minimum bundled SQLite version (3.54.1 fixes CVE-2026-119375 / RUSTSEC-2026-0459).
 pub const MIN_SQLITE_VERSION: (u32, u32, u32) = (3, 54, 1);
@@ -48,7 +51,9 @@ pub struct SqliteRuntimeDiagnostics {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SqliteBootstrapError {
-    #[error("SQLite database path points to a network UNC share, which is forbidden for WAL mode: {0}")]
+    #[error(
+        "SQLite database path points to a network UNC share, which is forbidden for WAL mode: {0}"
+    )]
     NetworkPathForbidden(String),
     #[error("SQLx error: {0}")]
     Sqlx(#[from] sqlx::Error),
@@ -72,7 +77,10 @@ pub fn is_unc_network_path(path: &Path) -> bool {
 
     // Standard Windows UNC: `\\server\share` (must have a non-empty host char after `\\`).
     if let Some(rest) = raw.strip_prefix(r"\\") {
-        return rest.chars().next().is_some_and(|c| c != '\\' && c != '/' && c != '?' && c != '.');
+        return rest
+            .chars()
+            .next()
+            .is_some_and(|c| c != '\\' && c != '/' && c != '?' && c != '.');
     }
 
     // Forward-slash UNC: `//server/share` (must NOT be `///local` which POSIX normalizes to `/local`).
@@ -171,9 +179,15 @@ mod tests {
     #[test]
     fn detects_unc_network_paths_without_false_positives_on_local_root_paths() {
         // Must detect UNC shares
-        assert!(is_unc_network_path(Path::new(r"\\fileserver\share\neon.db")));
-        assert!(is_unc_network_path(Path::new(r"\\192.168.10.5\eng\neon.db")));
-        assert!(is_unc_network_path(Path::new(r"\\?\UNC\fileserver\share\neon.db")));
+        assert!(is_unc_network_path(Path::new(
+            r"\\fileserver\share\neon.db"
+        )));
+        assert!(is_unc_network_path(Path::new(
+            r"\\192.168.10.5\eng\neon.db"
+        )));
+        assert!(is_unc_network_path(Path::new(
+            r"\\?\UNC\fileserver\share\neon.db"
+        )));
         assert!(is_unc_network_path(Path::new("//fileserver/share/neon.db")));
 
         // Must NOT flag local root, extended local Windows, or relative paths
@@ -187,7 +201,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verifies_bundled_sqlite_3_54_1_fts5_and_wal_at_runtime() -> Result<(), SqliteBootstrapError> {
+    async fn verifies_bundled_sqlite_3_54_1_fts5_and_wal_at_runtime()
+    -> Result<(), SqliteBootstrapError> {
         let tmp_path = std::env::temp_dir().join(format!("neon-pr01-{}.db", uuid::Uuid::now_v7()));
         let diag = verify_sqlite_runtime(&tmp_path, SqliteSynchronousMode::Full).await?;
         assert!(diag.fts5_enabled);

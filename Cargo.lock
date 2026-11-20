@@ -1051,8 +1051,11 @@ name = "platform-core"
 version = "0.1.0"
 dependencies = [
  "platform-sdk",
+ "semver",
  "serde",
+ "serde_json",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -1060,10 +1063,15 @@ dependencies = [
 name = "platform-db-pg"
 version = "0.1.0"
 dependencies = [
+ "platform-core",
  "platform-sdk",
+ "semver",
+ "serde_json",
  "sqlx",
  "thiserror",
+ "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1071,7 +1079,10 @@ name = "platform-db-sqlite"
 version = "0.1.0"
 dependencies = [
  "libsqlite3-sys",
+ "platform-core",
  "platform-sdk",
+ "semver",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",

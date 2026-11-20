@@ -1,6 +1,19 @@
-//! NEON Platform Core: domain and application services independent of concrete modules and DB engines.
+//! NEON Platform Core: database-agnostic orchestration, ModuleRegistry, migration contracts,
+//! deterministic SHA-256 checksum utility, and UTC millisecond timestamp conversion helpers.
 
-pub use platform_sdk::{RuntimeMode, SourceInstanceId};
+pub mod checksum;
+pub mod migration;
+pub mod registry;
+pub mod time;
+
+pub use checksum::sha256_hex;
+pub use migration::{
+    MigrationDirectionPolicy, MigrationError, MigrationRecord, MigrationSpec, MigrationStatus,
+    MigrationSummary, ModuleMigrator,
+};
+pub use platform_sdk::{RuntimeMode, SourceInstanceId, UtcMillis};
+pub use registry::{ModuleEntry, ModuleRegistry, ModuleState, RegistryError};
+pub use time::{TimestampError, iso8601_to_utc_millis, utc_millis_to_iso8601};
 
 /// Describes the platform runtime metadata exposed to diagnostics and bootstrap endpoints.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]

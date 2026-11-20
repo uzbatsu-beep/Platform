@@ -10,4 +10,5 @@
 
 ## 2. Правила PR и проверок
 - Небольшие функционально завершённые PR строго по `PR_PLAN.md`; **не выполнять автоматическое слияние PR без согласования**.
-- Обязательные проверки перед готовностью PR: `cargo fmt --check`, `cargo clippy -- -D warnings`, тесты PG 18/19 + SQLite 3.54, `cargo audit`, `cargo deny`, `check_arch_boundaries.py`, `check_airgapped_assets.py`, `pnpm typecheck/lint/test/build`.
+- **Обязательные проверки действующего CI (Foundation, PR-01/02):** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo check` Standalone/Server с `--locked`, `cargo test --workspace --locked` (включая SQLite runtime), `cargo-deny`, Python-тесты и архитектурные/air-gapped guards, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm build` и сканирование готового `dist/` на Linux/Windows.
+- **Этапные проверки:** PostgreSQL 18/19 интеграционные тесты обязательны при реализации соответствующих адаптеров и миграций (начиная с PR-03); `pnpm lint/test`, Vitest/Playwright — начиная с релевантных frontend PR; отдельный `cargo audit` вводится после подключения его к CI. Запрещено выдавать не реализованную или не выполненную проверку за PASS.

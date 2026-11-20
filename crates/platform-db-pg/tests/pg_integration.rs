@@ -222,10 +222,11 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
         tx.commit().await?;
         assert!(tx.commit().await.is_err());
     }
-    let count_after_commit: i64 = sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
-        .fetch_one(db.pool())
-        .await?
-        .try_get(0)?;
+    let count_after_commit: i64 =
+        sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(db.pool())
+            .await?
+            .try_get(0)?;
     assert_eq!(count_after_commit, 2);
 
     // 6. ModuleRegistry end-to-end lifecycle + negative duplicate/incompatible cases
@@ -256,10 +257,11 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     // 7. Stop & restart cleanly
     db.close().await;
     let db_restarted = PgDatabase::connect_url(&url, 4).await?;
-    let count_after_restart: i64 = sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
-        .fetch_one(db_restarted.pool())
-        .await?
-        .try_get(0)?;
+    let count_after_restart: i64 =
+        sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(db_restarted.pool())
+            .await?
+            .try_get(0)?;
     assert_eq!(count_after_restart, 2);
     db_restarted.close().await;
 

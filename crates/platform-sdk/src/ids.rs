@@ -196,7 +196,7 @@ impl RowVersion {
         format!(r#""v{}""#, self.0)
     }
 
-    /// Parses strong (`"v42"`) or weak (`W/"v42"`) HTTP `If-Match` / `ETag` header values.
+    /// Parses a single strong HTTP ETag (`"v42"`); weak `W/` validators are rejected for `If-Match` (RFC 9110).
     pub fn from_etag(raw: &str) -> Result<Self, IdValidationError> {
         let trimmed = raw.trim();
         // RFC 9110 If-Match uses strong comparison: weak validators must not match.

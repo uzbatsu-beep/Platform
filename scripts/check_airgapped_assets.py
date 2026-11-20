@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Verify zero external CDN/internet asset URLs with exact hostname matching and protocol-relative detection."""
+
+import argparse
+import re
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parent.parent
+
+ALLOWED_EXACT_HOSTS = {"localhost", "127.0.0.1", "platform.internal"}
+
+ALLOWED_NAMESPACE_URIS = {
+    "http://www.w3.org/2000/svg",
+    "https://www.w3.org/2000/svg",
+    "http://www.w3.org/1999/xlink",
+    "http://www.w3.org/1999/xhtml",
+    "http://www.w3.org/XML/1998/namespace",
+}
+
+HTTP_URL_RE = re.compile(r"https?://[^\x22\x27\s)`>]+", re.IGNORECASE)
+
+# Matches protocol-relative URLs both with AND without trailing path (e.g. `//cdn.example.com` and `//cdn.example.com/a.js`)
+# inside HTML attributes, CSS url(...), or quoted strings, without matching JS `// comments`.
+PROTOCOL_RELATIVE_RE = re.compile(
+    r"(?:src|href)\s*=\s*[\x22\x27](//[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?(?:/[^\x22\x27\s]*)?)[\x22\x27]"
+    r"|url\(\s*[\x22\x27]?(//[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?(?:/[^\x22\x27\s)]*)?)[\x22\x27]?\s*\)"
+    r"|[\x22\x27](//[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?(?:/[^\x22\x27\s]*)?)[\x22\x27]",
+    re.IGNORECASE,
+)
+
+SCAN_EXTENSIONS = {".html", ".css", ".js", ".mjs", ".ts", ".tsx", ".json", ".svg"}
+
+
+def _is_allowed_http_url(url: str) -> bool:
+    if url in ALLOWED_NAMESPACE_URIS:
+        return True
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    return host in ALLOWED_EXACT_HOSTS
+
+
+def scan_text(content: str, label: str) -> list[str]:
+    errors: list[str] = []
+    for match in HTTP_URL_RE.finditer(content):
+        url = match.group(0).rstrip(".,;:")
+        if _is_allowed_http_url(url):
+            continue
+        errors.append(f"{label}: external URL found -> {url}")
+
+    for match in PROTOCOL_RELATIVE_RE.finditer(content):
+        url = next(g for g in match.groups() if g is not None)
+        parsed = urlsplit("https:" + url)
+        host = (parsed.hostname or "").lower()
+        if host in ALLOWED_EXACT_HOSTS:
+            continue
+        errors.append(f"{label}: protocol-relative external URL found -> {url}")
+
+    return errors
+
+
+def scan_dir(target: Path, root: Path) -> list[str]:
+    errors: list[str] = []
+    if not target.exists():
+        return [f"Target path does not exist: {target}"]
+    for file_path in sorted(target.rglob("*")):
+        if not file_path.is_file() or file_path.suffix.lower() not in SCAN_EXTENSIONS:
+            continue
+        if "node_modules" in file_path.parts:
+            continue
+        if file_path.name in {"package.json", "tsconfig.json"}:
+            continue
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
+        rel = str(file_path.relative_to(root)) if file_path.is_relative_to(root) else str(file_path)
+        errors.extend(scan_text(content, rel))
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target", type=Path, default=ROOT / "frontend" / "src")
+    parser.add_argument("--include-index", action="store_true")
+    args = parser.parse_args()
+
+    errors = scan_dir(args.target, ROOT)
+    if args.include_index:
+        index_html = ROOT / "frontend" / "index.html"
+        errors.extend(scan_text(index_html.read_text(encoding="utf-8"), "frontend/index.html"))
+
+    if errors:
+        print("AIR-GAPPED ASSET CHECK FAILED:", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
+    print(f"OK: Air-gapped asset check passed for {args.target}.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,20 @@
+[package]
+name = "platform-db-sqlite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libsqlite3-sys.workspace = true
+platform-sdk.workspace = true
+sqlx = { workspace = true, features = ["sqlite"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+uuid.workspace = true

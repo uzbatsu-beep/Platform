@@ -1,0 +1,30 @@
+# NEON Standalone Configuration (Air-gapped localhost)
+[runtime]
+mode = "standalone"
+bind_ip = "127.0.0.1"
+tcp_port = 8080
+# source_instance_id MUST NOT be hardcoded in example configs.
+# A unique UUIDv7 is generated automatically on first instance initialization and persisted in instance state.
+
+[database]
+engine = "sqlite"
+# Must reside on a local filesystem; SMB/NFS/UNC paths are rejected at startup
+path = "./data/neon.db"
+# FULL guarantees committed transactions survive abrupt power loss
+synchronous = "FULL"
+busy_timeout_ms = 5000
+reader_pool_size = 4
+
+[storage]
+attachments_dir = "./data/attachments"
+backups_dir = "./data/backups"
+max_file_size_media_mb = 25
+max_file_size_engineering_mb = 50
+max_request_body_mb = 100
+
+[audit]
+retention_days = 365
+
+[logging]
+level = "info"
+format = "json"

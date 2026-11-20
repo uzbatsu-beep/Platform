@@ -1,0 +1,17 @@
+[package]
+name = "platform-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "neon-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+platform-cli-core.workspace = true

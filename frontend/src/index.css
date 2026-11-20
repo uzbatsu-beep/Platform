@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* Local system / bundled font stack — zero external CDN font requests */
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}

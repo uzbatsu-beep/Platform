@@ -1,0 +1,34 @@
+# NEON Server Configuration (Enterprise LAN, Linux/Windows)
+[runtime]
+mode = "server"
+bind_ip = "0.0.0.0"
+tcp_port = 8443
+# source_instance_id MUST NOT be hardcoded in example configs.
+# A unique UUIDv7 is generated automatically on first instance initialization and persisted in DB metadata.
+
+[tls]
+# Either enable native TLS (rustls) or explicitly set behind_trusted_proxy = true
+enabled = true
+cert_path = "/etc/neon/certs/server.crt"
+key_path = "/etc/neon/certs/server.key"
+behind_trusted_proxy = false
+
+[database]
+engine = "postgres"
+# Provide full DSN via PLATFORM__DATABASE__URL environment variable in production
+url = "postgres://neon_app@127.0.0.1:5432/neon"
+max_connections = 20
+
+[storage]
+attachments_dir = "/var/lib/neon/attachments"
+backups_dir = "/var/lib/neon/backups"
+max_file_size_media_mb = 25
+max_file_size_engineering_mb = 50
+max_request_body_mb = 100
+
+[audit]
+retention_days = 1095
+
+[logging]
+level = "info"
+format = "json"

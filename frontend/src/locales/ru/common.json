@@ -1,0 +1,7 @@
+{
+  "app": {
+    "name": "NEON",
+    "subtitle": "Модульная инженерно-технологическая платформа",
+    "bootstrapStatus": "Каркас PR-01 инициализирован. Оболочка Engineering Workspace Shell и встраивание SPA реализуются в PR-07."
+  }
+}

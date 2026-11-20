@@ -1,0 +1,14 @@
+[package]
+name = "platform-cli-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+platform-core.workspace = true
+platform-sdk.workspace = true

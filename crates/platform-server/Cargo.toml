@@ -1,0 +1,33 @@
+[package]
+name = "platform-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "neon"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Note: `embed-ui` (rust-embed static SPA serving) is scheduled for PR-07 when the Frontend Shell exists.
+default = ["standalone"]
+standalone = ["db-sqlite"]
+server = ["db-postgres"]
+db-postgres = ["dep:platform-db-pg"]
+db-sqlite = ["dep:platform-db-sqlite"]
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+platform-cli-core.workspace = true
+platform-core.workspace = true
+platform-db-pg = { workspace = true, optional = true }
+platform-db-sqlite = { workspace = true, optional = true }
+platform-sdk.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

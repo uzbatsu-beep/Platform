@@ -34,8 +34,8 @@ impl TransactionalCommandPort for SqliteInsertPort {
         cmd: CommandEnvelope<Self::Command>,
     ) -> BoxFuture<'a, Result<Self::Output, AppError>> {
         Box::pin(async move {
-            let sq_tx = SqliteTxContext::downcast_mut(tx)
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let sq_tx =
+                SqliteTxContext::downcast_mut(tx).map_err(|e| AppError::internal(e.to_string()))?;
             let conn = sq_tx
                 .connection_mut()
                 .map_err(|e| AppError::internal(e.to_string()))?;
@@ -45,7 +45,9 @@ impl TransactionalCommandPort for SqliteInsertPort {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
             if cmd.payload.fail_after_insert {
-                return Err(AppError::domain_conflict("forced failure on second operation"));
+                return Err(AppError::domain_conflict(
+                    "forced failure on second operation",
+                ));
             }
             Ok(())
         })
@@ -63,7 +65,12 @@ fn dummy_auth() -> AuthContext {
     }
 }
 
-fn test_manifest(id: &str, ns: &str, prefix: &str, compat: &str) -> Result<ModuleManifest, Box<dyn std::error::Error>> {
+fn test_manifest(
+    id: &str,
+    ns: &str,
+    prefix: &str,
+    compat: &str,
+) -> Result<ModuleManifest, Box<dyn std::error::Error>> {
     Ok(ModuleManifest {
         id: ModuleId::new(id)?,
         name_key: format!("modules.{id}.title"),
@@ -84,10 +91,17 @@ fn test_manifest(id: &str, ns: &str, prefix: &str, compat: &str) -> Result<Modul
 #[tokio::test]
 async fn sqlite_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Error>> {
     // 0. Reject network UNC location
-    let unc_err = SqliteDatabase::open(&SqliteConfig::new(Path::new(r"\\fileserver\share\neon.db"))).await.err();
-    assert!(matches!(unc_err, Some(SqliteBootstrapError::NetworkPathForbidden { .. })));
+    let unc_err =
+        SqliteDatabase::open(&SqliteConfig::new(Path::new(r"\\fileserver\share\neon.db")))
+            .await
+            .err();
+    assert!(matches!(
+        unc_err,
+        Some(SqliteBootstrapError::NetworkPathForbidden { .. })
+    ));
 
-    let db_path = std::env::temp_dir().join(format!("neon-pr03-matrix-{}.db", uuid::Uuid::now_v7()));
+    let db_path =
+        std::env::temp_dir().join(format!("neon-pr03-matrix-{}.db", uuid::Uuid::now_v7()));
     let cfg = SqliteConfig::new(&db_path);
     let db = SqliteDatabase::open(&cfg).await?;
 
@@ -100,14 +114,24 @@ async fn sqlite_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error:
     // 2. Initial migration + idempotent repeat + tampered checksum rejection
     let runner = SqliteMigrationRunner::new(db.clone());
     let core_sql = include_str!("../../../migrations/sqlite/core/0001_init_core_metadata.sql");
-    let core_migs = vec![MigrationSpec::new("core", 1, "init_core_metadata", core_sql)];
+    let core_migs = vec![MigrationSpec::new(
+        "core",
+        1,
+        "init_core_metadata",
+        core_sql,
+    )];
 
     let first = runner.run_namespace("core", &core_migs).await?;
     assert_eq!(first.applied_versions, vec![1]);
     let repeat = runner.run_namespace("core", &core_migs).await?;
     assert_eq!(repeat.skipped_versions, vec![1]);
 
-    let tampered = vec![MigrationSpec::new("core", 1, "init_core_metadata", "-- altered SQL")];
+    let tampered = vec![MigrationSpec::new(
+        "core",
+        1,
+        "init_core_metadata",
+        "-- altered SQL",
+    )];
     assert!(matches!(
         runner.run_namespace("core", &tampered).await,
         Err(MigrationError::ChecksumMismatch { .. })

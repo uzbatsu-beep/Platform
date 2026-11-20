@@ -81,7 +81,9 @@ impl ModuleRegistry {
         migrations: Vec<MigrationSpec>,
     ) -> Result<(), RegistryError> {
         if self.index_by_id.contains_key(&manifest.id) {
-            return Err(RegistryError::DuplicateRegistration(manifest.id.to_string()));
+            return Err(RegistryError::DuplicateRegistration(
+                manifest.id.to_string(),
+            ));
         }
         let idx = self.entries.len();
         self.index_by_id.insert(manifest.id.clone(), idx);

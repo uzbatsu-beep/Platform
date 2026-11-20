@@ -18,7 +18,9 @@ fn test_pg_url() -> Result<Option<String>, String> {
     let required = std::env::var("NEON_REQUIRE_PG_TESTS").unwrap_or_default() == "1";
     match std::env::var("NEON_TEST_PG_URL") {
         Ok(url) if !url.trim().is_empty() => Ok(Some(url)),
-        _ if required => Err("NEON_REQUIRE_PG_TESTS=1 is set, but NEON_TEST_PG_URL is missing".to_string()),
+        _ if required => {
+            Err("NEON_REQUIRE_PG_TESTS=1 is set, but NEON_TEST_PG_URL is missing".to_string())
+        }
         _ => Ok(None),
     }
 }
@@ -41,8 +43,8 @@ impl TransactionalCommandPort for PgInsertPort {
         cmd: CommandEnvelope<Self::Command>,
     ) -> BoxFuture<'a, Result<Self::Output, AppError>> {
         Box::pin(async move {
-            let pg_tx = PgTxContext::downcast_mut(tx)
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let pg_tx =
+                PgTxContext::downcast_mut(tx).map_err(|e| AppError::internal(e.to_string()))?;
             let conn = pg_tx
                 .connection_mut()
                 .map_err(|e| AppError::internal(e.to_string()))?;
@@ -53,7 +55,9 @@ impl TransactionalCommandPort for PgInsertPort {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
             if cmd.payload.fail_after_insert {
-                return Err(AppError::domain_conflict("forced failure on second operation"));
+                return Err(AppError::domain_conflict(
+                    "forced failure on second operation",
+                ));
             }
             Ok(())
         })
@@ -71,7 +75,12 @@ fn dummy_auth() -> AuthContext {
     }
 }
 
-fn test_manifest(id: &str, ns: &str, prefix: &str, compat: &str) -> Result<ModuleManifest, Box<dyn std::error::Error>> {
+fn test_manifest(
+    id: &str,
+    ns: &str,
+    prefix: &str,
+    compat: &str,
+) -> Result<ModuleManifest, Box<dyn std::error::Error>> {
     Ok(ModuleManifest {
         id: ModuleId::new(id)?,
         name_key: format!("modules.{id}.title"),
@@ -106,16 +115,29 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     // 3. Initial migration + idempotent repeat + tampered checksum rejection
     let runner = PgMigrationRunner::new(db.clone());
     let core_sql = include_str!("../../../migrations/postgres/core/0001_init_core_metadata.sql");
-    let core_migs = vec![MigrationSpec::new("core", 1, "init_core_metadata", core_sql)];
+    let core_migs = vec![MigrationSpec::new(
+        "core",
+        1,
+        "init_core_metadata",
+        core_sql,
+    )];
 
     let first = runner.run_namespace("core", &core_migs).await?;
     assert!(first.applied_versions == vec![1] || first.skipped_versions == vec![1]);
     let repeat = runner.run_namespace("core", &core_migs).await?;
     assert_eq!(repeat.skipped_versions, vec![1]);
 
-    let tampered = vec![MigrationSpec::new("core", 1, "init_core_metadata", "-- altered SQL")];
+    let tampered = vec![MigrationSpec::new(
+        "core",
+        1,
+        "init_core_metadata",
+        "-- altered SQL",
+    )];
     let tampered_err = runner.run_namespace("core", &tampered).await.err();
-    assert!(matches!(tampered_err, Some(MigrationError::ChecksumMismatch { .. })));
+    assert!(matches!(
+        tampered_err,
+        Some(MigrationError::ChecksumMismatch { .. })
+    ));
 
     // 4. Concurrent migrations on isolated test schema (unique per run)
     let suffix = format!("{}", uuid::Uuid::now_v7().simple());
@@ -123,7 +145,12 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     let create_table_sql = format!(
         "CREATE TABLE IF NOT EXISTS {ns_a}.items (id SERIAL PRIMARY KEY, label TEXT NOT NULL);"
     );
-    let mod_migs = vec![MigrationSpec::new(&ns_a, 1, "create_items", create_table_sql)];
+    let mod_migs = vec![MigrationSpec::new(
+        &ns_a,
+        1,
+        "create_items",
+        create_table_sql,
+    )];
     let (r1, r2) = tokio::join!(
         runner.run_namespace(&ns_a, &mod_migs),
         runner.run_namespace(&ns_a, &mod_migs)

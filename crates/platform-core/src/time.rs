@@ -174,7 +174,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_preserves_millisecond_precision_and_utc_normalization() -> Result<(), TimestampError> {
+    fn roundtrip_preserves_millisecond_precision_and_utc_normalization()
+    -> Result<(), TimestampError> {
         let samples = [
             (0_u64, "1970-01-01T00:00:00.000Z"),
             (951_782_400_123_u64, "2000-02-29T00:00:00.123Z"),

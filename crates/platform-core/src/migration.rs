@@ -93,7 +93,9 @@ pub enum MigrationError {
     InvalidNamespace(String),
     #[error("duplicate migration version {version} in namespace '{namespace}'")]
     DuplicateVersion { namespace: String, version: u32 },
-    #[error("checksum mismatch for migration {namespace} v{version}: stored={expected}, current={actual}")]
+    #[error(
+        "checksum mismatch for migration {namespace} v{version}: stored={expected}, current={actual}"
+    )]
     ChecksumMismatch {
         namespace: String,
         version: u32,

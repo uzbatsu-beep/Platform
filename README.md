@@ -12,7 +12,7 @@
 - CI-конфигурации для **Linux** и **Windows** (`.github/workflows/ci-rust.yml`, `ci-frontend.yml`).
 
 ## Известные ограничения PR-01
-1. **Lock-файлы (`Cargo.lock`, `frontend/pnpm-lock.yaml`):** не создаются в офлайн-песочнице — должны быть сгенерированы и закоммичены в среде с Rust 1.100.0, Node `>= 22.12`, pnpm `10.6.0` и доступом к реестрам (`cargo generate-lockfile` и `cd frontend && pnpm install --lockfile-only`).
+1. **Lock-файлы (`Cargo.lock`, `frontend/pnpm-lock.yaml`):** сгенерированы реальными GitHub Actions runners и закоммичены в ветку PR-01. Локальные/CI-сборки используют только `--locked` и `--frozen-lockfile`. Обновлять lock-файлы только отдельным проверяемым изменением.
 2. **Встраивание SPA в Standalone (`embed-ui` / `rust-embed`):** перенесено в **PR-07** (после реализации Frontend Engineering Workspace Shell).
 3. **Защита от сетевых ФС для SQLite:** в PR-01 реализована проверка UNC-путей (`is_unc_network_path`); OS-проверка типа смонтированной ФС (`statfs` / `GetDriveTypeW`) добавляется в **PR-03**.
 

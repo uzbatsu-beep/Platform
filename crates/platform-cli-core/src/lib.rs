@@ -4,7 +4,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "neon", version, about = "NEON Engineering Platform CLI & Server")]
+#[command(
+    name = "neon",
+    version,
+    about = "NEON Engineering Platform CLI & Server"
+)]
 pub struct NeonCli {
     /// Path to TOML configuration file
     #[arg(long, global = true, env = "NEON_CONFIG")]

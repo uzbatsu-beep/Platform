@@ -1,0 +1,48 @@
+name: Bootstrap lockfiles (PR-01 only)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+      - name: Generate real Cargo.lock (no publication)
+        run: cargo generate-lockfile
+      - name: Verify generated Cargo.lock is usable
+        run: cargo metadata --format-version 1 --locked --no-deps > /dev/null
+      - name: Upload Cargo.lock artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-pr01-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+  pnpm-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+      - name: Generate real pnpm-lock.yaml (ignore install scripts)
+        working-directory: frontend
+        run: pnpm install --lockfile-only --ignore-scripts
+      - name: Upload pnpm-lock.yaml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-pr01-pnpm-lock
+          path: frontend/pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 14

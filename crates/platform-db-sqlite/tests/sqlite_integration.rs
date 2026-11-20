@@ -174,10 +174,17 @@ async fn sqlite_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error:
     .try_get(0)?;
     assert_eq!(created, 0);
     assert!(matches!(
-        runner.run_namespace(
-            "mod_fail",
-            &[MigrationSpec::new("mod_wrong", 1, "wrong_namespace", "SELECT 1")],
-        ).await,
+        runner
+            .run_namespace(
+                "mod_fail",
+                &[MigrationSpec::new(
+                    "mod_wrong",
+                    1,
+                    "wrong_namespace",
+                    "SELECT 1"
+                )],
+            )
+            .await,
         Err(MigrationError::NamespaceMismatch { .. })
     ));
     let mut nontransactional = MigrationSpec::new("mod_fail", 1, "non_tx", "SELECT 1");

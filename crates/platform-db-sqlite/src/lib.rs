@@ -564,7 +564,11 @@ impl SqliteMigrationRunner {
 
         // A pool transaction owns the connection until commit or rollback; SQLx
         // provides automatic rollback on drop or task cancellation.
-        let mut tx = self.db.writer_pool().begin_with("BEGIN IMMEDIATE").await
+        let mut tx = self
+            .db
+            .writer_pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
         let mut summary = MigrationSummary {
@@ -583,9 +587,11 @@ impl SqliteMigrationRunner {
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
             if let Some(row) = existing {
-                let stored_checksum: String = row.try_get("checksum_sha256")
+                let stored_checksum: String = row
+                    .try_get("checksum_sha256")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let status: String = row.try_get("status")
+                let status: String = row
+                    .try_get("status")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
                 if status == MigrationStatus::Applied.as_str() {
                     if stored_checksum != checksum {
@@ -631,10 +637,11 @@ impl SqliteMigrationRunner {
 
             summary.applied_versions.push(spec.version);
         }
-        tx.commit().await.map_err(|e| MigrationError::Database(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
         Ok(summary)
     }
-
 }
 
 impl ModuleMigrator for SqliteMigrationRunner {

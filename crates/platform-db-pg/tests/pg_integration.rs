@@ -174,20 +174,25 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
         Err(MigrationError::ExecutionFailed { .. })
     ));
     assert!(runner.list_records(&fail_ns).await?.is_empty());
-    let rolled_back_table: bool = sqlx::query(
-        "SELECT to_regclass($1) IS NOT NULL",
-    )
-    .bind(format!("{fail_ns}.probe_rolled_back"))
-    .fetch_one(db.pool())
-    .await?
-    .try_get(0)?;
+    let rolled_back_table: bool = sqlx::query("SELECT to_regclass($1) IS NOT NULL")
+        .bind(format!("{fail_ns}.probe_rolled_back"))
+        .fetch_one(db.pool())
+        .await?
+        .try_get(0)?;
     assert!(!rolled_back_table);
 
     assert!(matches!(
-        runner.run_namespace(
-            &fail_ns,
-            &[MigrationSpec::new("mod_wrong", 1, "wrong_namespace", "SELECT 1")]
-        ).await,
+        runner
+            .run_namespace(
+                &fail_ns,
+                &[MigrationSpec::new(
+                    "mod_wrong",
+                    1,
+                    "wrong_namespace",
+                    "SELECT 1"
+                )]
+            )
+            .await,
         Err(MigrationError::NamespaceMismatch { .. })
     ));
     let mut nontransactional = MigrationSpec::new(&fail_ns, 1, "non_tx", "SELECT 1");

@@ -311,7 +311,11 @@ impl PgMigrationRunner {
     /// Initializes Core's migration ledger under a transaction-scoped advisory lock.
     /// Concurrent first-start processes cannot race on CREATE SCHEMA/TABLE.
     async fn ensure_ledger(&self) -> Result<(), MigrationError> {
-        let mut tx = self.db.pool().begin().await
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(MIGRATION_ADVISORY_LOCK_KEY)
@@ -339,7 +343,9 @@ impl PgMigrationRunner {
         .execute(&mut *tx)
         .await
         .map_err(|e| MigrationError::Database(e.to_string()))?;
-        tx.commit().await.map_err(|e| MigrationError::Database(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -438,7 +444,11 @@ impl PgMigrationRunner {
         }
 
         self.ensure_ledger().await?;
-        let mut tx = self.db.pool().begin().await
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(MIGRATION_ADVISORY_LOCK_KEY)
@@ -461,7 +471,10 @@ impl PgMigrationRunner {
         for spec in sorted {
             let checksum = spec.checksum_sha256();
             let version = i32::try_from(spec.version).map_err(|_| {
-                MigrationError::Database(format!("migration version {} exceeds PostgreSQL INTEGER", spec.version))
+                MigrationError::Database(format!(
+                    "migration version {} exceeds PostgreSQL INTEGER",
+                    spec.version
+                ))
             })?;
             let existing = sqlx::query(
                 "SELECT checksum_sha256, status FROM core.core_module_migrations WHERE namespace = $1 AND version = $2",
@@ -473,9 +486,11 @@ impl PgMigrationRunner {
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
             if let Some(row) = existing {
-                let stored_checksum: String = row.try_get("checksum_sha256")
+                let stored_checksum: String = row
+                    .try_get("checksum_sha256")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let status: String = row.try_get("status")
+                let status: String = row
+                    .try_get("status")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
                 if status == MigrationStatus::Applied.as_str() {
                     if stored_checksum != checksum {
@@ -519,10 +534,11 @@ impl PgMigrationRunner {
 
             summary.applied_versions.push(spec.version);
         }
-        tx.commit().await.map_err(|e| MigrationError::Database(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
         Ok(summary)
     }
-
 }
 
 impl ModuleMigrator for PgMigrationRunner {

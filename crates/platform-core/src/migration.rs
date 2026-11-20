@@ -99,7 +99,9 @@ pub enum MigrationError {
         expected: String,
         actual: String,
     },
-    #[error("non-transactional migration {namespace} v{version} requires a separate explicit protocol")]
+    #[error(
+        "non-transactional migration {namespace} v{version} requires a separate explicit protocol"
+    )]
     NonTransactionalUnsupported { namespace: String, version: u32 },
     #[error(
         "checksum mismatch for migration {namespace} v{version}: stored={expected}, current={actual}"

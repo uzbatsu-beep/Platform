@@ -257,7 +257,9 @@ pub fn validate_registry(
 
     for manifest in manifests {
         if !manifest.settings_schema.is_object() {
-            errors.push(ManifestError::InvalidSettingsSchema(manifest.id.to_string()));
+            errors.push(ManifestError::InvalidSettingsSchema(
+                manifest.id.to_string(),
+            ));
         }
         if !manifest.core_api_compat.matches(sdk_version) {
             errors.push(ManifestError::IncompatibleCoreApi {

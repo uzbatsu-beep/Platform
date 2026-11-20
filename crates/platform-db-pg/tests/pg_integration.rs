@@ -143,7 +143,7 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     let suffix = format!("{}", uuid::Uuid::now_v7().simple());
     let ns_a = format!("mod_t{}", &suffix[..8]);
     let create_table_sql = format!(
-        "CREATE TABLE IF NOT EXISTS {ns_a}.items (id SERIAL PRIMARY KEY, label TEXT NOT NULL);"
+        "CREATE TABLE {ns_a}.items (id SERIAL PRIMARY KEY, label TEXT NOT NULL);"
     );
     let mod_migs = vec![MigrationSpec::new(
         &ns_a,

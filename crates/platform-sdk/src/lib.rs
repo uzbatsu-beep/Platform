@@ -1,6 +1,37 @@
-//! NEON Platform SDK: shared contracts, domain IDs, and module boundaries.
+//! NEON Platform SDK: framework- and database-agnostic contracts shared across
+//! `platform-core` and all application modules (`mod-*`).
+//!
+//! Strictly forbidden dependencies: `axum`, `sqlx`, `tokio`, database drivers,
+//! `platform-core`, and concrete application modules.
 
-use uuid::Uuid;
+pub mod auth;
+pub mod error;
+pub mod events;
+pub mod ids;
+pub mod manifest;
+pub mod ports;
+
+pub use auth::{
+    ActorKind, AuthContext, PermissionDef, PermissionGrant, PermissionKey, Scope, ScopeKind,
+};
+pub use error::{AppError, ErrorCode, ProblemDetails};
+pub use events::{
+    DeliverySemantics, DeliveryStatus, EventEnvelope, OutboxDeliveryRecord, OutboxWriter,
+    ProcessedEventRecord,
+};
+pub use ids::{
+    CorrelationId, DepartmentId, DocumentId, EmployeeId, EntityMetadata, EquipmentComponentId,
+    EquipmentId, EventId, IdValidationError, IdempotencyKey, LocationId, OrganizationId, RoleId,
+    RowVersion, SchemaVersion, SiteId, SourceInstanceId, UserId, UtcMillis,
+};
+pub use manifest::{
+    ApiPrefix, DashboardWidgetDef, DbNamespace, EventContractDef, ManifestError, ModuleDependency,
+    ModuleId, ModuleManifest, UiRouteDef, validate_registry,
+};
+pub use ports::{
+    BoxFuture, CommandEnvelope, CommandExecutionMode, CommandPort, QueryPort,
+    TransactionalCommandPort, TxContext, TxEngine,
+};
 
 /// Current Platform SDK contract version checked against `ModuleManifest::core_api_compat`.
 pub const SDK_CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -13,65 +44,7 @@ pub enum RuntimeMode {
     Server,
 }
 
-/// Unique identifier of a NEON instance, generated once on first initialization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct SourceInstanceId(Uuid);
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum InstanceIdError {
-    #[error("source_instance_id cannot be nil or a placeholder UUID")]
-    NilOrPlaceholder,
-}
-
-impl SourceInstanceId {
-    /// Generates a fresh, unique UUIDv7 instance identifier.
-    #[must_use]
-    pub fn generate() -> Self {
-        Self(Uuid::now_v7())
-    }
-
-    /// Validates an existing persisted instance ID, rejecting nil/max placeholder UUIDs.
-    pub fn try_from_uuid(id: Uuid) -> Result<Self, InstanceIdError> {
-        if id.is_nil() || id.is_max() {
-            return Err(InstanceIdError::NilOrPlaceholder);
-        }
-        Ok(Self(id))
-    }
-
-    #[must_use]
-    pub const fn as_uuid(&self) -> Uuid {
-        self.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sdk_contract_version_is_valid_semver() {
-        let parsed = semver::Version::parse(SDK_CONTRACT_VERSION);
-        assert!(parsed.is_ok(), "SDK_CONTRACT_VERSION must be valid SemVer");
-    }
-
-    #[test]
-    fn generates_unique_non_nil_instance_ids() {
-        let a = SourceInstanceId::generate();
-        let b = SourceInstanceId::generate();
-        assert_ne!(a, b);
-        assert!(!a.as_uuid().is_nil());
-    }
-
-    #[test]
-    fn rejects_nil_and_max_placeholder_instance_ids() {
-        assert_eq!(
-            SourceInstanceId::try_from_uuid(Uuid::nil()),
-            Err(InstanceIdError::NilOrPlaceholder)
-        );
-        assert_eq!(
-            SourceInstanceId::try_from_uuid(Uuid::max()),
-            Err(InstanceIdError::NilOrPlaceholder)
-        );
-    }
+/// Parses `SDK_CONTRACT_VERSION` as SemVer.
+pub fn sdk_semver() -> Result<semver::Version, semver::Error> {
+    semver::Version::parse(SDK_CONTRACT_VERSION)
 }

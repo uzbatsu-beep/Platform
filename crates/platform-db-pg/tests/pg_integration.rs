@@ -142,9 +142,8 @@ async fn pg_full_pr03_integration_matrix() -> Result<(), Box<dyn std::error::Err
     // 4. Concurrent migrations on isolated test schema (unique per run)
     let suffix = format!("{}", uuid::Uuid::now_v7().simple());
     let ns_a = format!("mod_t{}", &suffix[..8]);
-    let create_table_sql = format!(
-        "CREATE TABLE {ns_a}.items (id SERIAL PRIMARY KEY, label TEXT NOT NULL);"
-    );
+    let create_table_sql =
+        format!("CREATE TABLE {ns_a}.items (id SERIAL PRIMARY KEY, label TEXT NOT NULL);");
     let mod_migs = vec![MigrationSpec::new(
         &ns_a,
         1,

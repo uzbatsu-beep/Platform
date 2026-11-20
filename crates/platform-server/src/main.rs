@@ -1,10 +1,14 @@
 //! NEON Composition Root (`neon` binary).
 
 #[cfg(all(feature = "db-postgres", feature = "db-sqlite"))]
-compile_error!("Enable either `db-postgres` (server) or `db-sqlite` (standalone), not both in one build profile.");
+compile_error!(
+    "Enable either `db-postgres` (server) or `db-sqlite` (standalone), not both in one build profile."
+);
 
 #[cfg(not(any(feature = "db-postgres", feature = "db-sqlite")))]
-compile_error!("Enable one database backend feature: `db-sqlite` (standalone) or `db-postgres` (server).");
+compile_error!(
+    "Enable one database backend feature: `db-sqlite` (standalone) or `db-postgres` (server)."
+);
 
 use axum::{Json, Router, routing::get};
 use clap::Parser;
@@ -30,7 +34,9 @@ async fn health_live() -> Json<PlatformInfo> {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .json()
         .init();
 

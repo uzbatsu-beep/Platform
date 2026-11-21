@@ -23,10 +23,39 @@ fn test_pg_url() -> Result<Option<String>, String> {
     }
 }
 
+/// Use an isolated PostgreSQL database for the hardening suite so independent tests
+/// cannot race while bootstrapping their first global administrator.
+async fn connect_pg_isolated_if_configured()
+-> Result<Option<PgDatabase>, Box<dyn std::error::Error>> {
+    let Some(url) = test_pg_url()? else {
+        return Ok(None);
+    };
+    let admin_db = PgDatabase::connect_url(&url, 2).await?;
+    let db_name = format!("neon_pr041_{}", uuid::Uuid::now_v7().simple());
+    sqlx::query(&format!("CREATE DATABASE {db_name}"))
+        .execute(admin_db.pool())
+        .await?;
+    admin_db.close().await;
+    let (root, _) = url
+        .rsplit_once('/')
+        .ok_or("NEON_TEST_PG_URL must include database name")?;
+    let isolated_db = PgDatabase::connect_url(&format!("{root}/{db_name}"), 8).await?;
+    Ok(Some(isolated_db))
+}
+
+async fn apply_core_migrations(
+    db: &PgDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
+    PgMigrationRunner::new(db.clone())
+        .run_namespace("core", &platform_db_pg::core_postgres_migrations())
+        .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
 -> Result<(), Box<dyn std::error::Error>> {
-    let Some(url) = test_pg_url().map_err(|e| e)? else {
+    let Some(url) = test_pg_url()? else {
         return Ok(());
     };
 
@@ -67,11 +96,11 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
 
     // Concurrent bootstrap on PostgreSQL (advisory-locked): exactly one succeeds or already initialized
     let admin_pass = SecretString::new("PgNeonAdminPass2026!");
-    let suffix = format!("{}", &uuid::Uuid::now_v7().simple().to_string()[..6]);
+    let suffix = uuid::Uuid::now_v7().simple().to_string()[..6].to_string();
     let admin_name = format!("pgadmin_{suffix}");
-    let _ = bootstrap
+    bootstrap
         .init_first_admin(&admin_name, "PG Admin", &admin_pass)
-        .await;
+        .await?;
 
     // Second bootstrap MUST fail with ConflictDomainState
     let repeat_err = bootstrap
@@ -83,10 +112,10 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
         Some(ErrorCode::ConflictDomainState)
     );
 
-    if let Ok(login) = auth_svc
-        .login(&admin_name, &admin_pass, Some("127.0.0.1"), None, None)
-        .await
     {
+        let login = auth_svc
+            .login(&admin_name, &admin_pass, Some("127.0.0.1"), None, None)
+            .await?;
         let (_s, _u, admin_ctx) = auth_svc
             .authenticate_session(
                 login.tokens.session_token.expose_secret(),
@@ -205,7 +234,7 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
 #[tokio::test]
 async fn pr04_1_scoped_rbac_idor_and_concurrent_last_admin_hardening_pg()
 -> Result<(), Box<dyn std::error::Error>> {
-    let Some(db) = connect_pg_if_configured().await else {
+    let Some(db) = connect_pg_isolated_if_configured().await? else {
         return Ok(());
     };
     apply_core_migrations(&db).await?;

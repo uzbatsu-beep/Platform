@@ -139,6 +139,12 @@ fn default_max_connections() -> u32 {
     20
 }
 
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 impl NeonRuntimeConfig {
     /// Loads configuration from an optional TOML path and applies explicit env overrides.
     pub fn load(path: Option<&Path>) -> Result<Self, AppError> {
@@ -157,34 +163,24 @@ impl NeonRuntimeConfig {
     }
 
     fn apply_env_overrides(&mut self) -> Result<(), AppError> {
-        if let Ok(v) = std::env::var("NEON_MODE") {
-            if !v.trim().is_empty() {
-                self.runtime.mode = v.trim().to_ascii_lowercase();
-            }
+        if let Some(v) = nonempty_env("NEON_MODE") {
+            self.runtime.mode = v.trim().to_ascii_lowercase();
         }
-        if let Ok(v) = std::env::var("NEON_BIND_IP") {
-            if !v.trim().is_empty() {
-                self.runtime.bind_ip = v.trim().to_string();
-            }
+        if let Some(v) = nonempty_env("NEON_BIND_IP") {
+            self.runtime.bind_ip = v.trim().to_string();
         }
-        if let Ok(v) = std::env::var("NEON_TCP_PORT") {
-            if !v.trim().is_empty() {
-                self.runtime.tcp_port = v.trim().parse::<u16>().map_err(|_| {
-                    AppError::validation("NEON_TCP_PORT must be a valid TCP port (1..=65535)")
-                })?;
-            }
+        if let Some(v) = nonempty_env("NEON_TCP_PORT") {
+            self.runtime.tcp_port = v.trim().parse::<u16>().map_err(|_| {
+                AppError::validation("NEON_TCP_PORT must be a valid TCP port (1..=65535)")
+            })?;
         }
-        if let Ok(v) = std::env::var("PLATFORM__DATABASE__URL") {
-            if !v.trim().is_empty() {
-                self.database.url = Some(v);
-                self.database.engine = "postgres".to_string();
-            }
+        if let Some(v) = nonempty_env("PLATFORM__DATABASE__URL") {
+            self.database.url = Some(v);
+            self.database.engine = "postgres".to_string();
         }
-        if let Ok(v) = std::env::var("NEON_SQLITE_PATH") {
-            if !v.trim().is_empty() {
-                self.database.path = Some(PathBuf::from(v));
-                self.database.engine = "sqlite".to_string();
-            }
+        if let Some(v) = nonempty_env("NEON_SQLITE_PATH") {
+            self.database.path = Some(PathBuf::from(v));
+            self.database.engine = "sqlite".to_string();
         }
         if let Ok(v) = std::env::var("NEON_TLS_ENABLED") {
             self.tls.enabled = v.eq_ignore_ascii_case("true") || v == "1";
@@ -192,23 +188,19 @@ impl NeonRuntimeConfig {
         if let Ok(v) = std::env::var("NEON_BEHIND_TRUSTED_PROXY") {
             self.tls.behind_trusted_proxy = v.eq_ignore_ascii_case("true") || v == "1";
         }
-        if let Ok(v) = std::env::var("NEON_TRUSTED_PROXIES") {
-            if !v.trim().is_empty() {
-                self.security.trusted_proxies = v
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
+        if let Some(v) = nonempty_env("NEON_TRUSTED_PROXIES") {
+            self.security.trusted_proxies = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
-        if let Ok(v) = std::env::var("NEON_TRUSTED_ORIGINS") {
-            if !v.trim().is_empty() {
-                self.security.trusted_origins = v
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
+        if let Some(v) = nonempty_env("NEON_TRUSTED_ORIGINS") {
+            self.security.trusted_origins = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
         Ok(())
     }

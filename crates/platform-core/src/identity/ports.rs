@@ -2,7 +2,7 @@
 //! Implemented independently by `platform-db-pg` (PostgreSQL 18/19) and `platform-db-sqlite` (SQLite 3.54.1).
 
 use platform_sdk::{
-    AppError, BoxFuture, DepartmentId, LocationId, OrganizationId, PermissionGrant, PermissionKey,
+    AppError, BoxFuture, DepartmentId, LocationId, PermissionGrant, PermissionKey,
     RoleId, RowVersion, Scope, SiteId, UserId, UtcMillis,
 };
 use uuid::Uuid;

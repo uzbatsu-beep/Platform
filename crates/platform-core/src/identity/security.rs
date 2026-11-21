@@ -290,10 +290,10 @@ impl LoginRateLimiter {
                     }
                     !q.is_empty()
                 });
-                if guard.len() >= self.config.max_tracked_keys {
-                    if let Some(first_key) = guard.keys().next().cloned() {
-                        guard.remove(&first_key);
-                    }
+                if guard.len() >= self.config.max_tracked_keys
+                    && let Some(first_key) = guard.keys().next().cloned()
+                {
+                    guard.remove(&first_key);
                 }
             }
             for key in [

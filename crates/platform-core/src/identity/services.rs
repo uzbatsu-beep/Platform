@@ -474,16 +474,15 @@ impl OrganizationService {
             .map_err(|e| AppError::internal(e.to_string()))?;
         ctx.require_permission(&perm, &Scope::Site { site_id })?;
 
-        if let Some(parent_id) = parent_department_id {
-            if !self
+        if let Some(parent_id) = parent_department_id
+            && !self
                 .org_repo
                 .department_belongs_to_site(parent_id, site_id)
                 .await?
-            {
-                return Err(AppError::validation(
-                    "Parent department does not belong to target site",
-                ));
-            }
+        {
+            return Err(AppError::validation(
+                "Parent department does not belong to target site",
+            ));
         }
         let now = UtcMillis::now();
         self.org_repo

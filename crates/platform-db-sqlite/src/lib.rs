@@ -11,9 +11,6 @@
 pub mod identity_repo;
 pub use identity_repo::SqliteIdentityStore;
 
-pub mod identity_repo;
-pub use identity_repo::SqliteIdentityStore;
-
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

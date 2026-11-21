@@ -7,9 +7,6 @@
 pub mod identity_repo;
 pub use identity_repo::PgIdentityStore;
 
-pub mod identity_repo;
-pub use identity_repo::PgIdentityStore;
-
 use std::any::Any;
 use std::fmt;
 use std::time::Duration;

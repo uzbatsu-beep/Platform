@@ -12,7 +12,7 @@ use platform_sdk::{
     PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId, SourceInstanceId, UserId,
     UtcMillis,
 };
-use sqlx::{Row, postgres::PgRow};
+use sqlx::{AssertSqlSafe, Row, postgres::PgRow};
 use uuid::Uuid;
 
 use crate::PgDatabase;
@@ -150,7 +150,7 @@ impl IdentityRepository for PgIdentityStore {
             let sql = format!(
                 "SELECT {USER_SELECT_COLS} FROM core.core_users WHERE normalized_username = $1"
             );
-            let row = sqlx::query(&sql)
+            let row = sqlx::query(AssertSqlSafe(sql))
                 .bind(normalized_username)
                 .fetch_optional(self.db.pool())
                 .await
@@ -162,7 +162,7 @@ impl IdentityRepository for PgIdentityStore {
     fn find_user_by_id<'a>(&'a self, id: UserId) -> BoxFuture<'a, Result<Option<User>, AppError>> {
         Box::pin(async move {
             let sql = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
-            let row = sqlx::query(&sql)
+            let row = sqlx::query(AssertSqlSafe(sql))
                 .bind(id.as_uuid())
                 .fetch_optional(self.db.pool())
                 .await
@@ -180,7 +180,7 @@ impl IdentityRepository for PgIdentityStore {
             if grants.iter().any(|g| matches!(g.scope, Scope::Global)) {
                 let sql =
                     format!("SELECT {USER_SELECT_COLS} FROM core.core_users ORDER BY username ASC");
-                let rows = sqlx::query(&sql)
+                let rows = sqlx::query(AssertSqlSafe(sql))
                     .fetch_all(self.db.pool())
                     .await
                     .map_err(|e| AppError::internal(e.to_string()))?;
@@ -212,7 +212,7 @@ impl IdentityRepository for PgIdentityStore {
                 ORDER BY u.username ASC
                 "#
             );
-            let rows = sqlx::query(&sql)
+            let rows = sqlx::query(AssertSqlSafe(sql))
                 .bind(include_self)
                 .bind(caller_user_id.as_uuid())
                 .bind(&site_ids)
@@ -350,7 +350,7 @@ impl IdentityRepository for PgIdentityStore {
             }
 
             let sel = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
-            let existing = sqlx::query(&sel)
+            let existing = sqlx::query(AssertSqlSafe(sel))
                 .bind(target_user_id.as_uuid())
                 .fetch_optional(&mut *tx)
                 .await
@@ -379,7 +379,7 @@ impl IdentityRepository for PgIdentityStore {
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            let updated_row = sqlx::query(&sel)
+            let updated_row = sqlx::query(AssertSqlSafe(sel))
                 .bind(target_user_id.as_uuid())
                 .fetch_one(&mut *tx)
                 .await

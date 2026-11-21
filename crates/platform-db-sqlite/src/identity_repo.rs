@@ -206,11 +206,11 @@ impl IdentityRepository for SqliteIdentityStore {
 
             let mut results: Vec<User> = Vec::new();
             let mut seen: HashSet<UserId> = HashSet::new();
-            if include_self {
-                if let Some(u) = self.find_user_by_id(caller_user_id).await? {
-                    seen.insert(u.id);
-                    results.push(u);
-                }
+            if include_self
+                && let Some(u) = self.find_user_by_id(caller_user_id).await?
+            {
+                seen.insert(u.id);
+                results.push(u);
             }
             for sid in site_ids {
                 let rows = sqlx::query(
@@ -1446,16 +1446,15 @@ impl OrganizationRepository for SqliteIdentityStore {
                         site_id: gs,
                         department_id,
                     } = g.scope
+                        && gs == site_id
                     {
-                        if gs == site_id {
-                            let part = sqlx::query("SELECT id FROM core_departments WHERE id = ? AND site_id = ? AND archived_at IS NULL")
-                                .bind(department_id.to_string())
-                                .bind(site_id.to_string())
-                                .fetch_all(self.db.reader_pool())
-                                .await
-                                .map_err(|e| AppError::internal(e.to_string()))?;
-                            collected.extend(part);
-                        }
+                        let part = sqlx::query("SELECT id FROM core_departments WHERE id = ? AND site_id = ? AND archived_at IS NULL")
+                            .bind(department_id.to_string())
+                            .bind(site_id.to_string())
+                            .fetch_all(self.db.reader_pool())
+                            .await
+                            .map_err(|e| AppError::internal(e.to_string()))?;
+                        collected.extend(part);
                     }
                 }
                 collected

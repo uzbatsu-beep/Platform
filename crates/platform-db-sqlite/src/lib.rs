@@ -8,6 +8,9 @@
 //! - Real `SqliteTxContext` implementing `platform_sdk::TxContext` with zero `unsafe`.
 //! - `SqliteMigrationRunner` (`core_module_migrations`, `BEGIN IMMEDIATE`, SHA-256 checksums, recovery).
 
+pub mod identity_repo;
+pub use identity_repo::SqliteIdentityStore;
+
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

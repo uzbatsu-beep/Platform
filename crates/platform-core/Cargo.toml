@@ -9,12 +9,15 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+argon2.workspace = true
 platform-sdk.workspace = true
+rand_core.workspace = true
 semver.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tokio.workspace = true

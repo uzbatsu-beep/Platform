@@ -4,6 +4,9 @@
 //! fail-fast version checks, schema isolation (`core`, `mod_*`), real `TxContext` (`PgTxContext`),
 //! advisory-locked `PgMigrationRunner`, and lossless `UtcMillis <-> TIMESTAMPTZ` helpers.
 
+pub mod identity_repo;
+pub use identity_repo::PgIdentityStore;
+
 use std::any::Any;
 use std::fmt;
 use std::time::Duration;

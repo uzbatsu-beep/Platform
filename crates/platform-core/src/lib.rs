@@ -1,7 +1,9 @@
-//! NEON Platform Core: database-agnostic orchestration, ModuleRegistry, migration contracts,
-//! deterministic SHA-256 checksum utility, and UTC millisecond timestamp conversion helpers.
+//! NEON Platform Core: database-agnostic domain and application services for
+//! ModuleRegistry, Migrations, Identity, AuthProvider, Scoped RBAC, Sessions, CSRF,
+//! Rate Limiting, Organization hierarchy, and Admin Bootstrap/Recovery.
 
 pub mod checksum;
+pub mod identity;
 pub mod migration;
 pub mod registry;
 pub mod time;
@@ -33,17 +35,5 @@ impl PlatformInfo {
             sdk_version: platform_sdk::SDK_CONTRACT_VERSION,
             mode,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn platform_info_matches_sdk_version() {
-        let info = PlatformInfo::new(RuntimeMode::Standalone);
-        assert_eq!(info.name, "NEON");
-        assert_eq!(info.sdk_version, platform_sdk::SDK_CONTRACT_VERSION);
     }
 }

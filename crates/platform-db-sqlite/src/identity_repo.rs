@@ -4,15 +4,14 @@ use std::collections::HashSet;
 
 use platform_core::identity::{
     CORE_PERMISSIONS, Department, IdentityRepository, Location, Organization,
-    authorize_assignment_revocation, authorize_user_deactivation,
     OrganizationRepository, Role, RoleAssignment, SecretString, SecurityEvent, Session,
-    SessionRepository, Site, User,
+    SessionRepository, Site, User, authorize_assignment_revocation, authorize_user_deactivation,
 };
 use platform_core::{iso8601_to_utc_millis, utc_millis_to_iso8601};
 use platform_sdk::{
-    AppError, AuthContext, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId, PermissionGrant,
-    PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId, SourceInstanceId, UserId,
-    UtcMillis,
+    AppError, AuthContext, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId,
+    PermissionGrant, PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId,
+    SourceInstanceId, UserId, UtcMillis,
 };
 use sqlx::{Row, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -39,32 +38,68 @@ impl SqliteIdentityStore {
     }
 
     fn map_user(row: &SqliteRow) -> Result<User, AppError> {
-        let id_str: String = row.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
-        let emp_opt: Option<String> = row.try_get("employee_id").map_err(|e| AppError::internal(e.to_string()))?;
+        let id_str: String = row
+            .try_get("id")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let emp_opt: Option<String> = row
+            .try_get("employee_id")
+            .map_err(|e| AppError::internal(e.to_string()))?;
         let employee_id = match emp_opt {
-            Some(s) => Some(EmployeeId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?),
+            Some(s) => Some(
+                EmployeeId::try_from_uuid(Self::parse_uuid(&s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+            ),
             None => None,
         };
-        let src_str: String = row.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
-        let sv: i64 = row.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
-        let rv: i64 = row.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
-        let is_active: i64 = row.try_get("is_active").map_err(|e| AppError::internal(e.to_string()))?;
-        let pref_str: String = row.try_get("preferences_json").map_err(|e| AppError::internal(e.to_string()))?;
-        let created_s: String = row.try_get("created_at").map_err(|e| AppError::internal(e.to_string()))?;
-        let updated_s: String = row.try_get("updated_at").map_err(|e| AppError::internal(e.to_string()))?;
-        let archived_s: Option<String> = row.try_get("archived_at").map_err(|e| AppError::internal(e.to_string()))?;
+        let src_str: String = row
+            .try_get("source_instance_id")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let sv: i64 = row
+            .try_get("schema_version")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let rv: i64 = row
+            .try_get("row_version")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let is_active: i64 = row
+            .try_get("is_active")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let pref_str: String = row
+            .try_get("preferences_json")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let created_s: String = row
+            .try_get("created_at")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let updated_s: String = row
+            .try_get("updated_at")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let archived_s: Option<String> = row
+            .try_get("archived_at")
+            .map_err(|e| AppError::internal(e.to_string()))?;
 
         Ok(User {
-            id: UserId::try_from_uuid(Self::parse_uuid(&id_str)?).map_err(|e| AppError::internal(e.to_string()))?,
-            username: row.try_get("username").map_err(|e| AppError::internal(e.to_string()))?,
-            normalized_username: row.try_get("normalized_username").map_err(|e| AppError::internal(e.to_string()))?,
-            password_hash: SecretString::new(row.try_get::<String, _>("password_hash").map_err(|e| AppError::internal(e.to_string()))?),
-            display_name: row.try_get("display_name").map_err(|e| AppError::internal(e.to_string()))?,
+            id: UserId::try_from_uuid(Self::parse_uuid(&id_str)?)
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            username: row
+                .try_get("username")
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            normalized_username: row
+                .try_get("normalized_username")
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            password_hash: SecretString::new(
+                row.try_get::<String, _>("password_hash")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+            ),
+            display_name: row
+                .try_get("display_name")
+                .map_err(|e| AppError::internal(e.to_string()))?,
             is_active: is_active == 1,
             employee_id,
-            preferences_json: serde_json::from_str(&pref_str).unwrap_or_else(|_| serde_json::json!({})),
-            source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_str)?).map_err(|e| AppError::internal(e.to_string()))?,
-            schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
+            preferences_json: serde_json::from_str(&pref_str)
+                .unwrap_or_else(|_| serde_json::json!({})),
+            source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_str)?)
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            schema_version: SchemaVersion::new(sv.max(1) as u32)
+                .map_err(|e| AppError::internal(e.to_string()))?,
             row_version: RowVersion::new(rv.max(1) as u64),
             created_at: Self::parse_ts(&created_s)?,
             updated_at: Self::parse_ts(&updated_s)?,
@@ -77,10 +112,11 @@ impl SqliteIdentityStore {
 
     /// Loads or initializes the persistent `SourceInstanceId` stored in `core_instance_meta`.
     pub async fn ensure_source_instance_id(&self) -> Result<SourceInstanceId, AppError> {
-        let existing = sqlx::query("SELECT source_instance_id FROM core_instance_meta WHERE id = 1")
-            .fetch_optional(self.db.writer_pool())
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        let existing =
+            sqlx::query("SELECT source_instance_id FROM core_instance_meta WHERE id = 1")
+                .fetch_optional(self.db.writer_pool())
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
         if let Some(row) = existing {
             let raw: String = row
                 .try_get("source_instance_id")
@@ -115,19 +151,27 @@ impl SqliteIdentityStore {
     }
 
     fn parse_scope_from_row(row: &SqliteRow) -> Result<Scope, AppError> {
-        let kind: String = row.try_get("scope_kind").map_err(|e| AppError::internal(e.to_string()))?;
+        let kind: String = row
+            .try_get("scope_kind")
+            .map_err(|e| AppError::internal(e.to_string()))?;
         match kind.as_str() {
             "global" => Ok(Scope::Global),
             "site" => {
-                let s: String = row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?;
+                let s: String = row
+                    .try_get("scope_site_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 Ok(Scope::Site {
                     site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?)
                         .map_err(|e| AppError::internal(e.to_string()))?,
                 })
             }
             "department" => {
-                let s: String = row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?;
-                let d: String = row.try_get("scope_department_id").map_err(|e| AppError::internal(e.to_string()))?;
+                let s: String = row
+                    .try_get("scope_site_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let d: String = row
+                    .try_get("scope_department_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 Ok(Scope::Department {
                     site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?)
                         .map_err(|e| AppError::internal(e.to_string()))?,
@@ -136,7 +180,9 @@ impl SqliteIdentityStore {
                 })
             }
             "own" => {
-                let o: String = row.try_get("scope_owner_user_id").map_err(|e| AppError::internal(e.to_string()))?;
+                let o: String = row
+                    .try_get("scope_owner_user_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 Ok(Scope::Own {
                     user_id: UserId::try_from_uuid(Self::parse_uuid(&o)?)
                         .map_err(|e| AppError::internal(e.to_string()))?,
@@ -146,11 +192,16 @@ impl SqliteIdentityStore {
         }
     }
 
-    fn scope_columns(scope: &Scope) -> (&'static str, Option<String>, Option<String>, Option<String>) {
+    fn scope_columns(
+        scope: &Scope,
+    ) -> (&'static str, Option<String>, Option<String>, Option<String>) {
         match scope {
             Scope::Global => ("global", None, None, None),
             Scope::Site { site_id } => ("site", Some(site_id.to_string()), None, None),
-            Scope::Department { site_id, department_id } => (
+            Scope::Department {
+                site_id,
+                department_id,
+            } => (
                 "department",
                 Some(site_id.to_string()),
                 Some(department_id.to_string()),
@@ -176,7 +227,10 @@ impl IdentityRepository for SqliteIdentityStore {
         })
     }
 
-    fn find_user_by_username<'a>(&'a self, normalized_username: &'a str) -> BoxFuture<'a, Result<Option<User>, AppError>> {
+    fn find_user_by_username<'a>(
+        &'a self,
+        normalized_username: &'a str,
+    ) -> BoxFuture<'a, Result<Option<User>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query("SELECT * FROM core_users WHERE normalized_username = ?")
                 .bind(normalized_username)
@@ -312,7 +366,12 @@ impl IdentityRepository for SqliteIdentityStore {
         })
     }
 
-    fn update_password_hash<'a>(&'a self, user_id: UserId, new_phc: SecretString, now: UtcMillis) -> BoxFuture<'a, Result<(), AppError>> {
+    fn update_password_hash<'a>(
+        &'a self,
+        user_id: UserId,
+        new_phc: SecretString,
+        now: UtcMillis,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             sqlx::query("UPDATE core_users SET password_hash = ?, updated_at = ?, row_version = row_version + 1 WHERE id = ?")
                 .bind(new_phc.expose_secret())
@@ -334,7 +393,12 @@ impl IdentityRepository for SqliteIdentityStore {
         now: UtcMillis,
     ) -> BoxFuture<'a, Result<User, AppError>> {
         Box::pin(async move {
-            let mut tx = self.db.writer_pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self
+                .db
+                .writer_pool()
+                .begin()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
 
             let existing = sqlx::query("SELECT * FROM core_users WHERE id = ?")
                 .bind(target_user_id.to_string())
@@ -438,26 +502,35 @@ impl IdentityRepository for SqliteIdentityStore {
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
             // Atomic session revocation inside the same transaction.
-            sqlx::query("UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-                .bind(&now_iso)
-                .bind(target_user_id.to_string())
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            sqlx::query(
+                "UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            )
+            .bind(&now_iso)
+            .bind(target_user_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
 
             let updated_row = sqlx::query("SELECT * FROM core_users WHERE id = ?")
                 .bind(target_user_id.to_string())
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Self::map_user(&updated_row)
         })
     }
 
     fn create_role<'a>(&'a self, role: Role) -> BoxFuture<'a, Result<Role, AppError>> {
         Box::pin(async move {
-            let mut tx = self.db.writer_pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self
+                .db
+                .writer_pool()
+                .begin()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             sqlx::query(
                 r#"
                 INSERT INTO core_roles (id, name, description, is_system, source_instance_id, schema_version, row_version, created_at, updated_at, archived_at)
@@ -479,14 +552,18 @@ impl IdentityRepository for SqliteIdentityStore {
             .map_err(|e| AppError::domain_conflict(e.to_string()))?;
 
             for perm in &role.permissions {
-                sqlx::query("INSERT INTO core_role_permissions (role_id, permission_key) VALUES (?, ?)")
-                    .bind(role.id.to_string())
-                    .bind(perm.as_str())
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| AppError::internal(e.to_string()))?;
+                sqlx::query(
+                    "INSERT INTO core_role_permissions (role_id, permission_key) VALUES (?, ?)",
+                )
+                .bind(role.id.to_string())
+                .bind(perm.as_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             }
-            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(role)
         })
     }
@@ -502,30 +579,56 @@ impl IdentityRepository for SqliteIdentityStore {
                 return Ok(None);
             };
             let perms = self.list_role_permissions(id).await?;
-            let src_str: String = r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i64 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let is_sys: i64 = r.try_get("is_system").map_err(|e| AppError::internal(e.to_string()))?;
-            let created_s: String = r.try_get("created_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let updated_s: String = r.try_get("updated_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let archived_s: Option<String> = r.try_get("archived_at").map_err(|e| AppError::internal(e.to_string()))?;
+            let src_str: String = r
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i64 = r
+                .try_get("schema_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r
+                .try_get("row_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let is_sys: i64 = r
+                .try_get("is_system")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let created_s: String = r
+                .try_get("created_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let updated_s: String = r
+                .try_get("updated_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let archived_s: Option<String> = r
+                .try_get("archived_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Role {
                 id,
-                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
-                description: r.try_get("description").map_err(|e| AppError::internal(e.to_string()))?,
+                name: r
+                    .try_get("name")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                description: r
+                    .try_get("description")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 is_system: is_sys == 1,
                 permissions: perms,
-                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_str)?).map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_str)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: Self::parse_ts(&created_s)?,
                 updated_at: Self::parse_ts(&updated_s)?,
-                archived_at: match archived_s { Some(s) => Some(Self::parse_ts(&s)?), None => None },
+                archived_at: match archived_s {
+                    Some(s) => Some(Self::parse_ts(&s)?),
+                    None => None,
+                },
             }))
         })
     }
 
-    fn assign_role<'a>(&'a self, assignment: RoleAssignment) -> BoxFuture<'a, Result<RoleAssignment, AppError>> {
+    fn assign_role<'a>(
+        &'a self,
+        assignment: RoleAssignment,
+    ) -> BoxFuture<'a, Result<RoleAssignment, AppError>> {
         Box::pin(async move {
             let (kind, sid, did, oid) = Self::scope_columns(&assignment.scope);
             let res = sqlx::query(
@@ -564,7 +667,12 @@ impl IdentityRepository for SqliteIdentityStore {
         assignment_id: Uuid,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            let mut tx = self.db.writer_pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self
+                .db
+                .writer_pool()
+                .begin()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
 
             // Load actual assignment row inside transaction (eliminates IDOR & TOCTOU).
             let assignment_row = sqlx::query(
@@ -588,13 +696,12 @@ impl IdentityRepository for SqliteIdentityStore {
                 .try_get("role_id")
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
-            let perm_rows = sqlx::query(
-                "SELECT permission_key FROM core_role_permissions WHERE role_id = ?",
-            )
-            .bind(&role_id_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
+            let perm_rows =
+                sqlx::query("SELECT permission_key FROM core_role_permissions WHERE role_id = ?")
+                    .bind(&role_id_str)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?;
             let mut role_perms = Vec::with_capacity(perm_rows.len());
             for pr in perm_rows {
                 let key_s: String = pr
@@ -605,7 +712,9 @@ impl IdentityRepository for SqliteIdentityStore {
                 );
             }
 
-            if let Err(err) = authorize_assignment_revocation(caller_ctx, &actual_scope, &role_perms) {
+            if let Err(err) =
+                authorize_assignment_revocation(caller_ctx, &actual_scope, &role_perms)
+            {
                 let _ = tx.rollback().await;
                 return Err(err);
             }
@@ -645,12 +754,17 @@ impl IdentityRepository for SqliteIdentityStore {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(())
         })
     }
 
-    fn list_effective_grants<'a>(&'a self, user_id: UserId) -> BoxFuture<'a, Result<Vec<PermissionGrant>, AppError>> {
+    fn list_effective_grants<'a>(
+        &'a self,
+        user_id: UserId,
+    ) -> BoxFuture<'a, Result<Vec<PermissionGrant>, AppError>> {
         Box::pin(async move {
             let rows = sqlx::query(
                 r#"
@@ -668,34 +782,53 @@ impl IdentityRepository for SqliteIdentityStore {
 
             let mut grants = Vec::with_capacity(rows.len());
             for row in rows {
-                let perm_s: String = row.try_get("permission_key").map_err(|e| AppError::internal(e.to_string()))?;
-                let kind: String = row.try_get("scope_kind").map_err(|e| AppError::internal(e.to_string()))?;
+                let perm_s: String = row
+                    .try_get("permission_key")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let kind: String = row
+                    .try_get("scope_kind")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 let scope = match kind.as_str() {
                     "global" => Scope::Global,
                     "site" => {
-                        let s: String = row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?;
+                        let s: String = row
+                            .try_get("scope_site_id")
+                            .map_err(|e| AppError::internal(e.to_string()))?;
                         Scope::Site {
-                            site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?,
+                            site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?)
+                                .map_err(|e| AppError::internal(e.to_string()))?,
                         }
                     }
                     "department" => {
-                        let s: String = row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?;
-                        let d: String = row.try_get("scope_department_id").map_err(|e| AppError::internal(e.to_string()))?;
+                        let s: String = row
+                            .try_get("scope_site_id")
+                            .map_err(|e| AppError::internal(e.to_string()))?;
+                        let d: String = row
+                            .try_get("scope_department_id")
+                            .map_err(|e| AppError::internal(e.to_string()))?;
                         Scope::Department {
-                            site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?,
-                            department_id: DepartmentId::try_from_uuid(Self::parse_uuid(&d)?).map_err(|e| AppError::internal(e.to_string()))?,
+                            site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?)
+                                .map_err(|e| AppError::internal(e.to_string()))?,
+                            department_id: DepartmentId::try_from_uuid(Self::parse_uuid(&d)?)
+                                .map_err(|e| AppError::internal(e.to_string()))?,
                         }
                     }
                     "own" => {
-                        let o: String = row.try_get("scope_owner_user_id").map_err(|e| AppError::internal(e.to_string()))?;
+                        let o: String = row
+                            .try_get("scope_owner_user_id")
+                            .map_err(|e| AppError::internal(e.to_string()))?;
                         Scope::Own {
-                            user_id: UserId::try_from_uuid(Self::parse_uuid(&o)?).map_err(|e| AppError::internal(e.to_string()))?,
+                            user_id: UserId::try_from_uuid(Self::parse_uuid(&o)?)
+                                .map_err(|e| AppError::internal(e.to_string()))?,
                         }
                     }
-                    other => return Err(AppError::internal(format!("unknown scope_kind: {other}"))),
+                    other => {
+                        return Err(AppError::internal(format!("unknown scope_kind: {other}")));
+                    }
                 };
                 grants.push(PermissionGrant {
-                    permission: PermissionKey::parse(&perm_s).map_err(|e| AppError::internal(e.to_string()))?,
+                    permission: PermissionKey::parse(&perm_s)
+                        .map_err(|e| AppError::internal(e.to_string()))?,
                     scope,
                 });
             }
@@ -711,7 +844,12 @@ impl IdentityRepository for SqliteIdentityStore {
         event: SecurityEvent,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            let mut tx = self.db.writer_pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self
+                .db
+                .writer_pool()
+                .begin()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             let existing_admins: i64 = sqlx::query(
                 r#"
                 SELECT COUNT(DISTINCT a.user_id)
@@ -775,12 +913,14 @@ impl IdentityRepository for SqliteIdentityStore {
             .map_err(|e| AppError::internal(e.to_string()))?;
 
             for perm in &admin_role.permissions {
-                sqlx::query("INSERT INTO core_role_permissions (role_id, permission_key) VALUES (?, ?)")
-                    .bind(admin_role.id.to_string())
-                    .bind(perm.as_str())
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| AppError::internal(e.to_string()))?;
+                sqlx::query(
+                    "INSERT INTO core_role_permissions (role_id, permission_key) VALUES (?, ?)",
+                )
+                .bind(admin_role.id.to_string())
+                .bind(perm.as_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             }
 
             sqlx::query(
@@ -811,7 +951,9 @@ impl IdentityRepository for SqliteIdentityStore {
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(())
         })
     }
@@ -824,7 +966,12 @@ impl IdentityRepository for SqliteIdentityStore {
         event: SecurityEvent,
     ) -> BoxFuture<'a, Result<UserId, AppError>> {
         Box::pin(async move {
-            let mut tx = self.db.writer_pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self
+                .db
+                .writer_pool()
+                .begin()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             let row = sqlx::query("SELECT id FROM core_users WHERE normalized_username = ?")
                 .bind(normalized_username)
                 .fetch_optional(&mut *tx)
@@ -834,8 +981,11 @@ impl IdentityRepository for SqliteIdentityStore {
                 let _ = tx.rollback().await;
                 return Err(AppError::not_found("Target user not found"));
             };
-            let id_str: String = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
-            let user_id = UserId::try_from_uuid(Self::parse_uuid(&id_str)?).map_err(|e| AppError::internal(e.to_string()))?;
+            let id_str: String = r
+                .try_get("id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let user_id = UserId::try_from_uuid(Self::parse_uuid(&id_str)?)
+                .map_err(|e| AppError::internal(e.to_string()))?;
             let now_iso = utc_millis_to_iso8601(now);
 
             sqlx::query("UPDATE core_users SET password_hash = ?, updated_at = ?, row_version = row_version + 1 WHERE id = ?")
@@ -846,12 +996,14 @@ impl IdentityRepository for SqliteIdentityStore {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
-            sqlx::query("UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-                .bind(&now_iso)
-                .bind(&id_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            sqlx::query(
+                "UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            )
+            .bind(&now_iso)
+            .bind(&id_str)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
 
             sqlx::query(
                 "INSERT INTO core_security_events (id, event_type, actor_user_id, target_user_id, detail_json, occurred_at) VALUES (?, ?, NULL, ?, ?, ?)",
@@ -865,12 +1017,17 @@ impl IdentityRepository for SqliteIdentityStore {
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(user_id)
         })
     }
 
-    fn record_security_event<'a>(&'a self, event: SecurityEvent) -> BoxFuture<'a, Result<(), AppError>> {
+    fn record_security_event<'a>(
+        &'a self,
+        event: SecurityEvent,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             sqlx::query(
                 "INSERT INTO core_security_events (id, event_type, actor_user_id, target_user_id, detail_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -896,23 +1053,42 @@ impl IdentityRepository for SqliteIdentityStore {
                 .map_err(|e| AppError::internal(e.to_string()))?;
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
-                let id_s: String = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
-                let actor_s: Option<String> = r.try_get("actor_user_id").map_err(|e| AppError::internal(e.to_string()))?;
-                let target_s: Option<String> = r.try_get("target_user_id").map_err(|e| AppError::internal(e.to_string()))?;
-                let det_s: String = r.try_get("detail_json").map_err(|e| AppError::internal(e.to_string()))?;
-                let occ_s: String = r.try_get("occurred_at").map_err(|e| AppError::internal(e.to_string()))?;
+                let id_s: String = r
+                    .try_get("id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let actor_s: Option<String> = r
+                    .try_get("actor_user_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let target_s: Option<String> = r
+                    .try_get("target_user_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let det_s: String = r
+                    .try_get("detail_json")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let occ_s: String = r
+                    .try_get("occurred_at")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 out.push(SecurityEvent {
                     id: Self::parse_uuid(&id_s)?,
-                    event_type: r.try_get("event_type").map_err(|e| AppError::internal(e.to_string()))?,
+                    event_type: r
+                        .try_get("event_type")
+                        .map_err(|e| AppError::internal(e.to_string()))?,
                     actor_user_id: match actor_s {
-                        Some(s) => Some(UserId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?),
+                        Some(s) => Some(
+                            UserId::try_from_uuid(Self::parse_uuid(&s)?)
+                                .map_err(|e| AppError::internal(e.to_string()))?,
+                        ),
                         None => None,
                     },
                     target_user_id: match target_s {
-                        Some(s) => Some(UserId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?),
+                        Some(s) => Some(
+                            UserId::try_from_uuid(Self::parse_uuid(&s)?)
+                                .map_err(|e| AppError::internal(e.to_string()))?,
+                        ),
                         None => None,
                     },
-                    detail_json: serde_json::from_str(&det_s).unwrap_or_else(|_| serde_json::json!({})),
+                    detail_json: serde_json::from_str(&det_s)
+                        .unwrap_or_else(|_| serde_json::json!({})),
                     occurred_at: Self::parse_ts(&occ_s)?,
                 });
             }
@@ -920,17 +1096,24 @@ impl IdentityRepository for SqliteIdentityStore {
         })
     }
 
-    fn list_role_permissions<'a>(&'a self, role_id: RoleId) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>> {
+    fn list_role_permissions<'a>(
+        &'a self,
+        role_id: RoleId,
+    ) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>> {
         Box::pin(async move {
-            let rows = sqlx::query("SELECT permission_key FROM core_role_permissions WHERE role_id = ?")
-                .bind(role_id.to_string())
-                .fetch_all(self.db.reader_pool())
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let rows =
+                sqlx::query("SELECT permission_key FROM core_role_permissions WHERE role_id = ?")
+                    .bind(role_id.to_string())
+                    .fetch_all(self.db.reader_pool())
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?;
             let mut perms = Vec::with_capacity(rows.len());
             for r in rows {
-                let k: String = r.try_get("permission_key").map_err(|e| AppError::internal(e.to_string()))?;
-                perms.push(PermissionKey::parse(&k).map_err(|e| AppError::internal(e.to_string()))?);
+                let k: String = r
+                    .try_get("permission_key")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                perms
+                    .push(PermissionKey::parse(&k).map_err(|e| AppError::internal(e.to_string()))?);
             }
             Ok(perms)
         })
@@ -967,7 +1150,10 @@ impl SessionRepository for SqliteIdentityStore {
         })
     }
 
-    fn find_by_token_hash<'a>(&'a self, token_hash_sha256: &'a str) -> BoxFuture<'a, Result<Option<Session>, AppError>> {
+    fn find_by_token_hash<'a>(
+        &'a self,
+        token_hash_sha256: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Session>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query("SELECT * FROM core_sessions WHERE token_hash_sha256 = ?")
                 .bind(token_hash_sha256)
@@ -977,18 +1163,37 @@ impl SessionRepository for SqliteIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let id_s: String = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
-            let uid_s: String = r.try_get("user_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let created_s: String = r.try_get("created_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let last_s: String = r.try_get("last_seen_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let idle_s: String = r.try_get("idle_expires_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let abs_s: String = r.try_get("absolute_expires_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let rev_s: Option<String> = r.try_get("revoked_at").map_err(|e| AppError::internal(e.to_string()))?;
+            let id_s: String = r
+                .try_get("id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let uid_s: String = r
+                .try_get("user_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let created_s: String = r
+                .try_get("created_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let last_s: String = r
+                .try_get("last_seen_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let idle_s: String = r
+                .try_get("idle_expires_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let abs_s: String = r
+                .try_get("absolute_expires_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let rev_s: Option<String> = r
+                .try_get("revoked_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Session {
                 id: Self::parse_uuid(&id_s)?,
-                user_id: UserId::try_from_uuid(Self::parse_uuid(&uid_s)?).map_err(|e| AppError::internal(e.to_string()))?,
-                token_hash_sha256: r.try_get("token_hash_sha256").map_err(|e| AppError::internal(e.to_string()))?,
-                csrf_token_hash_sha256: r.try_get("csrf_token_hash_sha256").map_err(|e| AppError::internal(e.to_string()))?,
+                user_id: UserId::try_from_uuid(Self::parse_uuid(&uid_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                token_hash_sha256: r
+                    .try_get("token_hash_sha256")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                csrf_token_hash_sha256: r
+                    .try_get("csrf_token_hash_sha256")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 created_at: Self::parse_ts(&created_s)?,
                 last_seen_at: Self::parse_ts(&last_s)?,
                 idle_expires_at: Self::parse_ts(&idle_s)?,
@@ -997,52 +1202,78 @@ impl SessionRepository for SqliteIdentityStore {
                     Some(s) => Some(Self::parse_ts(&s)?),
                     None => None,
                 },
-                source_ip: r.try_get("source_ip").map_err(|e| AppError::internal(e.to_string()))?,
-                user_agent: r.try_get("user_agent").map_err(|e| AppError::internal(e.to_string()))?,
+                source_ip: r
+                    .try_get("source_ip")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                user_agent: r
+                    .try_get("user_agent")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
             }))
         })
     }
 
-    fn touch_session<'a>(&'a self, session_id: Uuid, last_seen_at: UtcMillis, new_idle_expires_at: UtcMillis) -> BoxFuture<'a, Result<(), AppError>> {
+    fn touch_session<'a>(
+        &'a self,
+        session_id: Uuid,
+        last_seen_at: UtcMillis,
+        new_idle_expires_at: UtcMillis,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            sqlx::query("UPDATE core_sessions SET last_seen_at = ?, idle_expires_at = ? WHERE id = ?")
-                .bind(utc_millis_to_iso8601(last_seen_at))
-                .bind(utc_millis_to_iso8601(new_idle_expires_at))
-                .bind(session_id.to_string())
-                .execute(self.db.writer_pool())
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            sqlx::query(
+                "UPDATE core_sessions SET last_seen_at = ?, idle_expires_at = ? WHERE id = ?",
+            )
+            .bind(utc_millis_to_iso8601(last_seen_at))
+            .bind(utc_millis_to_iso8601(new_idle_expires_at))
+            .bind(session_id.to_string())
+            .execute(self.db.writer_pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(())
         })
     }
 
-    fn revoke_session<'a>(&'a self, session_id: Uuid, revoked_at: UtcMillis) -> BoxFuture<'a, Result<(), AppError>> {
+    fn revoke_session<'a>(
+        &'a self,
+        session_id: Uuid,
+        revoked_at: UtcMillis,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            sqlx::query("UPDATE core_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-                .bind(utc_millis_to_iso8601(revoked_at))
-                .bind(session_id.to_string())
-                .execute(self.db.writer_pool())
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            sqlx::query(
+                "UPDATE core_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            )
+            .bind(utc_millis_to_iso8601(revoked_at))
+            .bind(session_id.to_string())
+            .execute(self.db.writer_pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(())
         })
     }
 
-    fn revoke_all_user_sessions<'a>(&'a self, user_id: UserId, revoked_at: UtcMillis) -> BoxFuture<'a, Result<u64, AppError>> {
+    fn revoke_all_user_sessions<'a>(
+        &'a self,
+        user_id: UserId,
+        revoked_at: UtcMillis,
+    ) -> BoxFuture<'a, Result<u64, AppError>> {
         Box::pin(async move {
-            let res = sqlx::query("UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-                .bind(utc_millis_to_iso8601(revoked_at))
-                .bind(user_id.to_string())
-                .execute(self.db.writer_pool())
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let res = sqlx::query(
+                "UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            )
+            .bind(utc_millis_to_iso8601(revoked_at))
+            .bind(user_id.to_string())
+            .execute(self.db.writer_pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(res.rows_affected())
         })
     }
 }
 
 impl OrganizationRepository for SqliteIdentityStore {
-    fn create_organization<'a>(&'a self, org: Organization) -> BoxFuture<'a, Result<Organization, AppError>> {
+    fn create_organization<'a>(
+        &'a self,
+        org: Organization,
+    ) -> BoxFuture<'a, Result<Organization, AppError>> {
         Box::pin(async move {
             sqlx::query(
                 "INSERT INTO core_organizations (id, name, code, source_instance_id, schema_version, row_version, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
@@ -1083,7 +1314,10 @@ impl OrganizationRepository for SqliteIdentityStore {
         })
     }
 
-    fn create_department<'a>(&'a self, dept: Department) -> BoxFuture<'a, Result<Department, AppError>> {
+    fn create_department<'a>(
+        &'a self,
+        dept: Department,
+    ) -> BoxFuture<'a, Result<Department, AppError>> {
         Box::pin(async move {
             sqlx::query(
                 "INSERT INTO core_departments (id, site_id, parent_department_id, name, code, source_instance_id, schema_version, row_version, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
@@ -1138,19 +1372,38 @@ impl OrganizationRepository for SqliteIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let org_s: String = r.try_get("organization_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let src_s: String = r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i64 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let cr_s: String = r.try_get("created_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let up_s: String = r.try_get("updated_at").map_err(|e| AppError::internal(e.to_string()))?;
+            let org_s: String = r
+                .try_get("organization_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let src_s: String = r
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i64 = r
+                .try_get("schema_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r
+                .try_get("row_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let cr_s: String = r
+                .try_get("created_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let up_s: String = r
+                .try_get("updated_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Site {
                 id,
-                organization_id: OrganizationId::try_from_uuid(Self::parse_uuid(&org_s)?).map_err(|e| AppError::internal(e.to_string()))?,
-                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
-                code: r.try_get("code").map_err(|e| AppError::internal(e.to_string()))?,
-                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_s)?).map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
+                organization_id: OrganizationId::try_from_uuid(Self::parse_uuid(&org_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                name: r
+                    .try_get("name")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                code: r
+                    .try_get("code")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: Self::parse_ts(&cr_s)?,
                 updated_at: Self::parse_ts(&up_s)?,
@@ -1159,7 +1412,10 @@ impl OrganizationRepository for SqliteIdentityStore {
         })
     }
 
-    fn find_department<'a>(&'a self, id: DepartmentId) -> BoxFuture<'a, Result<Option<Department>, AppError>> {
+    fn find_department<'a>(
+        &'a self,
+        id: DepartmentId,
+    ) -> BoxFuture<'a, Result<Option<Department>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query("SELECT * FROM core_departments WHERE id = ?")
                 .bind(id.to_string())
@@ -1169,25 +1425,51 @@ impl OrganizationRepository for SqliteIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let site_s: String = r.try_get("site_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let parent_s: Option<String> = r.try_get("parent_department_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let src_s: String = r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i64 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let cr_s: String = r.try_get("created_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let up_s: String = r.try_get("updated_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let ar_s: Option<String> = r.try_get("archived_at").map_err(|e| AppError::internal(e.to_string()))?;
+            let site_s: String = r
+                .try_get("site_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let parent_s: Option<String> = r
+                .try_get("parent_department_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let src_s: String = r
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i64 = r
+                .try_get("schema_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r
+                .try_get("row_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let cr_s: String = r
+                .try_get("created_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let up_s: String = r
+                .try_get("updated_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let ar_s: Option<String> = r
+                .try_get("archived_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Department {
                 id,
-                site_id: SiteId::try_from_uuid(Self::parse_uuid(&site_s)?).map_err(|e| AppError::internal(e.to_string()))?,
+                site_id: SiteId::try_from_uuid(Self::parse_uuid(&site_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 parent_department_id: match parent_s {
-                    Some(s) => Some(DepartmentId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?),
+                    Some(s) => Some(
+                        DepartmentId::try_from_uuid(Self::parse_uuid(&s)?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
+                    ),
                     None => None,
                 },
-                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
-                code: r.try_get("code").map_err(|e| AppError::internal(e.to_string()))?,
-                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_s)?).map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
+                name: r
+                    .try_get("name")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                code: r
+                    .try_get("code")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: Self::parse_ts(&cr_s)?,
                 updated_at: Self::parse_ts(&up_s)?,
@@ -1199,7 +1481,10 @@ impl OrganizationRepository for SqliteIdentityStore {
         })
     }
 
-    fn find_location<'a>(&'a self, id: LocationId) -> BoxFuture<'a, Result<Option<Location>, AppError>> {
+    fn find_location<'a>(
+        &'a self,
+        id: LocationId,
+    ) -> BoxFuture<'a, Result<Option<Location>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query("SELECT * FROM core_locations WHERE id = ?")
                 .bind(id.to_string())
@@ -1209,29 +1494,58 @@ impl OrganizationRepository for SqliteIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let site_s: String = r.try_get("site_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let dept_s: Option<String> = r.try_get("department_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let parent_s: Option<String> = r.try_get("parent_location_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let src_s: String = r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i64 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
-            let cr_s: String = r.try_get("created_at").map_err(|e| AppError::internal(e.to_string()))?;
-            let up_s: String = r.try_get("updated_at").map_err(|e| AppError::internal(e.to_string()))?;
+            let site_s: String = r
+                .try_get("site_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let dept_s: Option<String> = r
+                .try_get("department_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let parent_s: Option<String> = r
+                .try_get("parent_location_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let src_s: String = r
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i64 = r
+                .try_get("schema_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r
+                .try_get("row_version")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let cr_s: String = r
+                .try_get("created_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let up_s: String = r
+                .try_get("updated_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Location {
                 id,
-                site_id: SiteId::try_from_uuid(Self::parse_uuid(&site_s)?).map_err(|e| AppError::internal(e.to_string()))?,
+                site_id: SiteId::try_from_uuid(Self::parse_uuid(&site_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 department_id: match dept_s {
-                    Some(s) => Some(DepartmentId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?),
+                    Some(s) => Some(
+                        DepartmentId::try_from_uuid(Self::parse_uuid(&s)?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
+                    ),
                     None => None,
                 },
                 parent_location_id: match parent_s {
-                    Some(s) => Some(LocationId::try_from_uuid(Self::parse_uuid(&s)?).map_err(|e| AppError::internal(e.to_string()))?),
+                    Some(s) => Some(
+                        LocationId::try_from_uuid(Self::parse_uuid(&s)?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
+                    ),
                     None => None,
                 },
-                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
-                code: r.try_get("code").map_err(|e| AppError::internal(e.to_string()))?,
-                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_s)?).map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
+                name: r
+                    .try_get("name")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                code: r
+                    .try_get("code")
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(Self::parse_uuid(&src_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: Self::parse_ts(&cr_s)?,
                 updated_at: Self::parse_ts(&up_s)?,
@@ -1240,7 +1554,10 @@ impl OrganizationRepository for SqliteIdentityStore {
         })
     }
 
-    fn list_sites_for_grants<'a>(&'a self, grants: &'a [PermissionGrant]) -> BoxFuture<'a, Result<Vec<Site>, AppError>> {
+    fn list_sites_for_grants<'a>(
+        &'a self,
+        grants: &'a [PermissionGrant],
+    ) -> BoxFuture<'a, Result<Vec<Site>, AppError>> {
         Box::pin(async move {
             let has_global = grants.iter().any(|g| matches!(g.scope, Scope::Global));
             let rows = if has_global {
@@ -1263,19 +1580,24 @@ impl OrganizationRepository for SqliteIdentityStore {
                 }
                 let mut collected = Vec::new();
                 for sid in ids {
-                    let part = sqlx::query("SELECT id FROM core_sites WHERE id = ? AND archived_at IS NULL")
-                        .bind(sid)
-                        .fetch_all(self.db.reader_pool())
-                        .await
-                        .map_err(|e| AppError::internal(e.to_string()))?;
+                    let part = sqlx::query(
+                        "SELECT id FROM core_sites WHERE id = ? AND archived_at IS NULL",
+                    )
+                    .bind(sid)
+                    .fetch_all(self.db.reader_pool())
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                     collected.extend(part);
                 }
                 collected
             };
             let mut sites = Vec::with_capacity(rows.len());
             for r in rows {
-                let id_s: String = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
-                let sid = SiteId::try_from_uuid(Self::parse_uuid(&id_s)?).map_err(|e| AppError::internal(e.to_string()))?;
+                let id_s: String = r
+                    .try_get("id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let sid = SiteId::try_from_uuid(Self::parse_uuid(&id_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 if let Some(s) = self.find_site(sid).await? {
                     sites.push(s);
                 }
@@ -1284,9 +1606,15 @@ impl OrganizationRepository for SqliteIdentityStore {
         })
     }
 
-    fn list_departments_for_site<'a>(&'a self, site_id: SiteId, grants: &'a [PermissionGrant]) -> BoxFuture<'a, Result<Vec<Department>, AppError>> {
+    fn list_departments_for_site<'a>(
+        &'a self,
+        site_id: SiteId,
+        grants: &'a [PermissionGrant],
+    ) -> BoxFuture<'a, Result<Vec<Department>, AppError>> {
         Box::pin(async move {
-            let covers_site = grants.iter().any(|g| g.scope.covers(&Scope::Site { site_id }));
+            let covers_site = grants
+                .iter()
+                .any(|g| g.scope.covers(&Scope::Site { site_id }));
             let rows = if covers_site {
                 sqlx::query("SELECT id FROM core_departments WHERE site_id = ? AND archived_at IS NULL ORDER BY code ASC")
                     .bind(site_id.to_string())
@@ -1296,7 +1624,11 @@ impl OrganizationRepository for SqliteIdentityStore {
             } else {
                 let mut collected = Vec::new();
                 for g in grants {
-                    if let Scope::Department { site_id: gs, department_id } = g.scope {
+                    if let Scope::Department {
+                        site_id: gs,
+                        department_id,
+                    } = g.scope
+                    {
                         if gs == site_id {
                             let part = sqlx::query("SELECT id FROM core_departments WHERE id = ? AND site_id = ? AND archived_at IS NULL")
                                 .bind(department_id.to_string())
@@ -1312,8 +1644,11 @@ impl OrganizationRepository for SqliteIdentityStore {
             };
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
-                let id_s: String = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
-                let did = DepartmentId::try_from_uuid(Self::parse_uuid(&id_s)?).map_err(|e| AppError::internal(e.to_string()))?;
+                let id_s: String = r
+                    .try_get("id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let did = DepartmentId::try_from_uuid(Self::parse_uuid(&id_s)?)
+                    .map_err(|e| AppError::internal(e.to_string()))?;
                 if let Some(d) = self.find_department(did).await? {
                     out.push(d);
                 }
@@ -1336,7 +1671,9 @@ impl OrganizationRepository for SqliteIdentityStore {
             if let Some(mut cursor) = new_parent {
                 for _ in 0..64 {
                     if cursor == id {
-                        return Err(AppError::domain_conflict("Circular department hierarchy detected"));
+                        return Err(AppError::domain_conflict(
+                            "Circular department hierarchy detected",
+                        ));
                     }
                     match self.find_department(cursor).await? {
                         Some(d) => match d.parent_department_id {
@@ -1399,13 +1736,15 @@ impl OrganizationRepository for SqliteIdentityStore {
                 .map_err(|e| AppError::internal(e.to_string()))?
                 .try_get(0)
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            let assignments: i64 = sqlx::query("SELECT COUNT(*) FROM core_role_assignments WHERE scope_department_id = ?")
-                .bind(id.to_string())
-                .fetch_one(self.db.reader_pool())
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?
-                .try_get(0)
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let assignments: i64 = sqlx::query(
+                "SELECT COUNT(*) FROM core_role_assignments WHERE scope_department_id = ?",
+            )
+            .bind(id.to_string())
+            .fetch_one(self.db.reader_pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .try_get(0)
+            .map_err(|e| AppError::internal(e.to_string()))?;
 
             if child_depts > 0 || active_locs > 0 || assignments > 0 {
                 return Err(AppError::domain_conflict(
@@ -1440,7 +1779,11 @@ impl OrganizationRepository for SqliteIdentityStore {
         })
     }
 
-    fn department_belongs_to_site<'a>(&'a self, department_id: DepartmentId, site_id: SiteId) -> BoxFuture<'a, Result<bool, AppError>> {
+    fn department_belongs_to_site<'a>(
+        &'a self,
+        department_id: DepartmentId,
+        site_id: SiteId,
+    ) -> BoxFuture<'a, Result<bool, AppError>> {
         Box::pin(async move {
             let count: i64 = sqlx::query("SELECT COUNT(*) FROM core_departments WHERE id = ? AND site_id = ? AND archived_at IS NULL")
                 .bind(department_id.to_string())
@@ -1459,8 +1802,12 @@ impl OrganizationRepository for SqliteIdentityStore {
             match scope {
                 Scope::Global => Ok(true),
                 Scope::Site { site_id } => Ok(self.find_site(*site_id).await?.is_some()),
-                Scope::Department { site_id, department_id } => {
-                    self.department_belongs_to_site(*department_id, *site_id).await
+                Scope::Department {
+                    site_id,
+                    department_id,
+                } => {
+                    self.department_belongs_to_site(*department_id, *site_id)
+                        .await
                 }
                 Scope::Own { user_id } => Ok(self.find_user_by_id(*user_id).await?.is_some()),
             }

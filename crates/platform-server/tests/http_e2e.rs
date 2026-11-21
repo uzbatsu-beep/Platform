@@ -57,7 +57,8 @@ fn extract_cookie_pair(set_cookie: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<dyn std::error::Error>> {
+async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout()
+-> Result<(), Box<dyn std::error::Error>> {
     let tmp_db = std::env::temp_dir().join(format!("neon-http-e2e-{}.db", uuid::Uuid::now_v7()));
     let mut raw_cfg = NeonRuntimeConfig::default();
     raw_cfg.database.path = Some(tmp_db.clone());
@@ -80,15 +81,30 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
     // 1. /health/live + security headers
     let health_res = app
         .clone()
-        .oneshot(build_request(Method::GET, "/health/live", peer1, None, None, None, None, None)?)
+        .oneshot(build_request(
+            Method::GET,
+            "/health/live",
+            peer1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?)
         .await?;
     assert_eq!(health_res.status(), StatusCode::OK);
     assert_eq!(
-        health_res.headers().get(header::X_CONTENT_TYPE_OPTIONS).and_then(|v| v.to_str().ok()),
+        health_res
+            .headers()
+            .get(header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|v| v.to_str().ok()),
         Some("nosniff")
     );
     assert_eq!(
-        health_res.headers().get(header::X_FRAME_OPTIONS).and_then(|v| v.to_str().ok()),
+        health_res
+            .headers()
+            .get(header::X_FRAME_OPTIONS)
+            .and_then(|v| v.to_str().ok()),
         Some("DENY")
     );
 
@@ -108,7 +124,10 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
         .await?;
     assert_eq!(login_res.status(), StatusCode::OK);
     assert_eq!(
-        login_res.headers().get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+        login_res
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
         Some("no-store")
     );
     let set_cookie = login_res
@@ -120,8 +139,12 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
     assert!(set_cookie.contains("HttpOnly"));
     assert!(set_cookie.contains("SameSite=Lax"));
     let admin_cookie = extract_cookie_pair(&set_cookie).ok_or("bad cookie")?;
-    let login_body: Value = serde_json::from_slice(&to_bytes(login_res.into_body(), 16 * 1024).await?)?;
-    let admin_csrf = login_body["csrf_token"].as_str().ok_or("missing csrf_token")?.to_string();
+    let login_body: Value =
+        serde_json::from_slice(&to_bytes(login_res.into_body(), 16 * 1024).await?)?;
+    let admin_csrf = login_body["csrf_token"]
+        .as_str()
+        .ok_or("missing csrf_token")?
+        .to_string();
 
     // 3. GET /api/v1/auth/me with cookie -> 200 OK
     let me_res = app
@@ -174,13 +197,25 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
     let (_s, _u, admin_ctx) = state
         .auth_svc
         .authenticate_session(
-            admin_cookie.split_once('=').map(|(_, v)| v).ok_or("cookie split")?,
+            admin_cookie
+                .split_once('=')
+                .map(|(_, v)| v)
+                .ok_or("cookie split")?,
             CorrelationId::generate(),
         )
         .await?;
-    let org = state.org_svc.create_organization(&admin_ctx, "E2E Plant", "E2E-ORG").await?;
-    let site_a = state.org_svc.create_site(&admin_ctx, org.id, "Site A", "E2E-SA").await?;
-    let site_b = state.org_svc.create_site(&admin_ctx, org.id, "Site B", "E2E-SB").await?;
+    let org = state
+        .org_svc
+        .create_organization(&admin_ctx, "E2E Plant", "E2E-ORG")
+        .await?;
+    let site_a = state
+        .org_svc
+        .create_site(&admin_ctx, org.id, "Site A", "E2E-SA")
+        .await?;
+    let site_b = state
+        .org_svc
+        .create_site(&admin_ctx, org.id, "Site B", "E2E-SB")
+        .await?;
 
     let mgr_role = state
         .authz_svc
@@ -207,10 +242,38 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
         )
         .await?;
     let user_pass = SecretString::new("E2eUserPassphrase#2026");
-    let mgr_a = state.authz_svc.create_user(&admin_ctx, "e2e_mgr_a", "Mgr A", &user_pass, &Scope::Global).await?;
-    let user_b = state.authz_svc.create_user(&admin_ctx, "e2e_user_b", "User B", &user_pass, &Scope::Global).await?;
-    state.authz_svc.assign_role(&admin_ctx, mgr_a.id, mgr_role.id, Scope::Site { site_id: site_a.id }).await?;
-    let ub_assign = state.authz_svc.assign_role(&admin_ctx, user_b.id, worker_role.id, Scope::Site { site_id: site_b.id }).await?;
+    let mgr_a = state
+        .authz_svc
+        .create_user(&admin_ctx, "e2e_mgr_a", "Mgr A", &user_pass, &Scope::Global)
+        .await?;
+    let user_b = state
+        .authz_svc
+        .create_user(
+            &admin_ctx,
+            "e2e_user_b",
+            "User B",
+            &user_pass,
+            &Scope::Global,
+        )
+        .await?;
+    state
+        .authz_svc
+        .assign_role(
+            &admin_ctx,
+            mgr_a.id,
+            mgr_role.id,
+            Scope::Site { site_id: site_a.id },
+        )
+        .await?;
+    let ub_assign = state
+        .authz_svc
+        .assign_role(
+            &admin_ctx,
+            user_b.id,
+            worker_role.id,
+            Scope::Site { site_id: site_b.id },
+        )
+        .await?;
 
     let mgr_login = app
         .clone()
@@ -222,16 +285,26 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
             Some(origin),
             None,
             Some("203.0.113.99"), // spoofed XFF ignored for untrusted peer
-            Some(serde_json::json!({"username": "e2e_mgr_a", "password": user_pass.expose_secret()})),
+            Some(
+                serde_json::json!({"username": "e2e_mgr_a", "password": user_pass.expose_secret()}),
+            ),
         )?)
         .await?;
     assert_eq!(mgr_login.status(), StatusCode::OK);
     let mgr_cookie = extract_cookie_pair(
-        mgr_login.headers().get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).ok_or("mgr cookie")?,
+        mgr_login
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .ok_or("mgr cookie")?,
     )
     .ok_or("mgr cookie pair")?;
-    let mgr_body: Value = serde_json::from_slice(&to_bytes(mgr_login.into_body(), 16 * 1024).await?)?;
-    let mgr_csrf = mgr_body["csrf_token"].as_str().ok_or("mgr csrf")?.to_string();
+    let mgr_body: Value =
+        serde_json::from_slice(&to_bytes(mgr_login.into_body(), 16 * 1024).await?)?;
+    let mgr_csrf = mgr_body["csrf_token"]
+        .as_str()
+        .ok_or("mgr csrf")?
+        .to_string();
 
     // Cross-session CSRF attempt: admin's CSRF token used with mgr_a's cookie -> 403
     let cross_csrf = app
@@ -312,10 +385,14 @@ async fn real_http_e2e_auth_csrf_idor_rate_limit_and_logout() -> Result<(), Box<
         .await?;
     assert_eq!(after_logout.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(
-        after_logout.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+        after_logout
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
         Some("application/problem+json")
     );
-    let err_json: Value = serde_json::from_slice(&to_bytes(after_logout.into_body(), 16 * 1024).await?)?;
+    let err_json: Value =
+        serde_json::from_slice(&to_bytes(after_logout.into_body(), 16 * 1024).await?)?;
     assert!(err_json["request_id"].is_string());
 
     let _ = std::fs::remove_file(&tmp_db);

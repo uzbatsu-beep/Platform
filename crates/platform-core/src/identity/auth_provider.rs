@@ -66,7 +66,10 @@ impl AuthProvider for LocalAuthProvider {
 
             let mut rehashed = false;
             if needs_rehash {
-                let upgraded_phc = self.hasher.hash_new_password_async(password.clone()).await?;
+                let upgraded_phc = self
+                    .hasher
+                    .hash_new_password_async(password.clone())
+                    .await?;
                 self.repo
                     .update_password_hash(user.id, upgraded_phc, UtcMillis::now())
                     .await?;

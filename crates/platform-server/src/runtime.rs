@@ -26,7 +26,8 @@ pub struct RuntimeBundle {
 
 impl RuntimeBundle {
     pub fn build_admin_service(&self) -> Result<AdminBootstrapService, AppError> {
-        let hasher = PasswordHasherService::new(Argon2Config::default(), PasswordPolicy::default())?;
+        let hasher =
+            PasswordHasherService::new(Argon2Config::default(), PasswordPolicy::default())?;
         Ok(AdminBootstrapService::new(
             self.identity_repo.clone(),
             hasher,
@@ -35,7 +36,8 @@ impl RuntimeBundle {
     }
 
     pub fn build_api_state(&self, cfg: &ValidatedRuntimeConfig) -> Result<ApiState, AppError> {
-        let hasher = PasswordHasherService::new(Argon2Config::default(), PasswordPolicy::default())?;
+        let hasher =
+            PasswordHasherService::new(Argon2Config::default(), PasswordPolicy::default())?;
         let provider = Arc::new(LocalAuthProvider::new(
             self.identity_repo.clone(),
             hasher.clone(),

@@ -38,7 +38,8 @@ fn run_neon_with_stdin(
 }
 
 #[tokio::test]
-async fn real_cli_binary_admin_init_reset_and_bad_config_e2e() -> Result<(), Box<dyn std::error::Error>> {
+async fn real_cli_binary_admin_init_reset_and_bad_config_e2e()
+-> Result<(), Box<dyn std::error::Error>> {
     let unique = uuid::Uuid::now_v7();
     let tmp_dir = std::env::temp_dir().join(format!("neon-cli-e2e-{unique}"));
     std::fs::create_dir_all(&tmp_dir)?;
@@ -57,7 +58,13 @@ async fn real_cli_binary_admin_init_reset_and_bad_config_e2e() -> Result<(), Box
     // 1. First `neon admin init` -> exit 0, password never leaked
     let init_out = run_neon_with_stdin(
         &cfg_path,
-        &["admin", "init", "--username", "cli_admin", "--password-stdin"],
+        &[
+            "admin",
+            "init",
+            "--username",
+            "cli_admin",
+            "--password-stdin",
+        ],
         Some(&format!("{initial_pw}\n")),
     )?;
     let init_stdout = String::from_utf8_lossy(&init_out.stdout);
@@ -69,7 +76,13 @@ async fn real_cli_binary_admin_init_reset_and_bad_config_e2e() -> Result<(), Box
     // 2. Repeat `neon admin init` -> non-zero exit code (409 Conflict)
     let repeat_out = run_neon_with_stdin(
         &cfg_path,
-        &["admin", "init", "--username", "cli_admin_2", "--password-stdin"],
+        &[
+            "admin",
+            "init",
+            "--username",
+            "cli_admin_2",
+            "--password-stdin",
+        ],
         Some(&format!("{initial_pw}\n")),
     )?;
     assert!(!repeat_out.status.success());
@@ -77,12 +90,21 @@ async fn real_cli_binary_admin_init_reset_and_bad_config_e2e() -> Result<(), Box
     // 3. `neon admin reset-password` -> exit 0, new password works, old password rejected, SecurityEvent recorded
     let reset_out = run_neon_with_stdin(
         &cfg_path,
-        &["admin", "reset-password", "--username", "cli_admin", "--password-stdin"],
+        &[
+            "admin",
+            "reset-password",
+            "--username",
+            "cli_admin",
+            "--password-stdin",
+        ],
         Some(&format!("{rotated_pw}\n")),
     )?;
     let reset_stdout = String::from_utf8_lossy(&reset_out.stdout);
     let reset_stderr = String::from_utf8_lossy(&reset_out.stderr);
-    assert!(reset_out.status.success(), "reset-password failed: {reset_stderr}");
+    assert!(
+        reset_out.status.success(),
+        "reset-password failed: {reset_stderr}"
+    );
     assert!(!reset_stdout.contains(rotated_pw));
     assert!(!reset_stderr.contains(rotated_pw));
 
@@ -91,13 +113,28 @@ async fn real_cli_binary_admin_init_reset_and_bad_config_e2e() -> Result<(), Box
     let hasher = PasswordHasherService::new(Argon2Config::default(), PasswordPolicy::default())?;
     let provider = LocalAuthProvider::new(store.clone(), hasher);
 
-    assert!(provider.authenticate("cli_admin", &SecretString::new(initial_pw)).await.is_err());
-    let auth_ok = provider.authenticate("cli_admin", &SecretString::new(rotated_pw)).await?;
+    assert!(
+        provider
+            .authenticate("cli_admin", &SecretString::new(initial_pw))
+            .await
+            .is_err()
+    );
+    let auth_ok = provider
+        .authenticate("cli_admin", &SecretString::new(rotated_pw))
+        .await?;
     assert_eq!(auth_ok.user.username, "cli_admin");
 
     let events = store.list_security_events().await?;
-    assert!(events.iter().any(|e| e.event_type == "security.admin_bootstrap_initialized"));
-    assert!(events.iter().any(|e| e.event_type == "security.admin_password_recovered"));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == "security.admin_bootstrap_initialized")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == "security.admin_password_recovered")
+    );
 
     // 4. Invalid config (non-loopback HTTP in Standalone) -> non-zero exit code
     let bad_cfg_path = tmp_dir.join("bad.toml");

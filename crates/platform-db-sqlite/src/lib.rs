@@ -158,7 +158,10 @@ const FORBIDDEN_NETWORK_FSTYPES: &[&str] = &[
 
 /// Parses `/proc/mounts` content and returns the filesystem type of the longest matching mount point.
 #[must_use]
-pub fn detect_mount_fstype_from_proc_mounts(canonical_path: &Path, proc_mounts: &str) -> Option<String> {
+pub fn detect_mount_fstype_from_proc_mounts(
+    canonical_path: &Path,
+    proc_mounts: &str,
+) -> Option<String> {
     let target = canonical_path.to_string_lossy();
     let mut best_len = 0_usize;
     let mut best_fstype: Option<String> = None;
@@ -466,7 +469,10 @@ impl SqliteMigrationRunner {
         Ok(())
     }
 
-    pub async fn list_records(&self, namespace: &str) -> Result<Vec<MigrationRecord>, MigrationError> {
+    pub async fn list_records(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<MigrationRecord>, MigrationError> {
         validate_migration_namespace(namespace)?;
         self.ensure_ledger().await?;
         let rows = sqlx::query(
@@ -484,24 +490,38 @@ impl SqliteMigrationRunner {
 
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
-            let status_str: String = row.try_get("status").map_err(|e| MigrationError::Database(e.to_string()))?;
+            let status_str: String = row
+                .try_get("status")
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
             let status = match status_str.as_str() {
                 "applied" => MigrationStatus::Applied,
                 "in_progress" => MigrationStatus::InProgress,
                 _ => MigrationStatus::Failed,
             };
-            let version: i64 = row.try_get("version").map_err(|e| MigrationError::Database(e.to_string()))?;
-            let applied_str: String = row.try_get("applied_at").map_err(|e| MigrationError::Database(e.to_string()))?;
+            let version: i64 = row
+                .try_get("version")
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let applied_str: String = row
+                .try_get("applied_at")
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
             let applied_at = iso8601_to_utc_millis(&applied_str)
                 .map_err(|e| MigrationError::Database(e.to_string()))?;
             records.push(MigrationRecord {
-                namespace: row.try_get("namespace").map_err(|e| MigrationError::Database(e.to_string()))?,
+                namespace: row
+                    .try_get("namespace")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
                 version: version.max(0) as u32,
-                name: row.try_get("name").map_err(|e| MigrationError::Database(e.to_string()))?,
-                checksum_sha256: row.try_get("checksum_sha256").map_err(|e| MigrationError::Database(e.to_string()))?,
+                name: row
+                    .try_get("name")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
+                checksum_sha256: row
+                    .try_get("checksum_sha256")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
                 applied_at,
                 status,
-                error_message: row.try_get("error_message").map_err(|e| MigrationError::Database(e.to_string()))?,
+                error_message: row
+                    .try_get("error_message")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
             });
         }
         Ok(records)
@@ -604,7 +624,11 @@ impl SqliteMigrationRunner {
                     }
                 }
             } else {
-                self.db.writer_pool().execute(spec.sql.as_str()).await.map(|_| ())
+                self.db
+                    .writer_pool()
+                    .execute(spec.sql.as_str())
+                    .await
+                    .map(|_| ())
             };
 
             match exec_result {
@@ -655,7 +679,6 @@ impl ModuleMigrator for SqliteMigrationRunner {
     }
 }
 
-
 /// Returns the immutable embedded Core SQLite migrations (`0001` + `0002`).
 #[must_use]
 pub fn core_sqlite_migrations() -> Vec<MigrationSpec> {
@@ -688,8 +711,12 @@ mod tests {
 
     #[test]
     fn detects_unc_and_linux_network_mounts_without_false_positives() {
-        assert!(is_unc_network_path(Path::new(r"\\fileserver\share\neon.db")));
-        assert!(is_unc_network_path(Path::new(r"\\?\UNC\fileserver\share\neon.db")));
+        assert!(is_unc_network_path(Path::new(
+            r"\\fileserver\share\neon.db"
+        )));
+        assert!(is_unc_network_path(Path::new(
+            r"\\?\UNC\fileserver\share\neon.db"
+        )));
         assert!(is_unc_network_path(Path::new("//fileserver/share/neon.db")));
 
         assert!(!is_unc_network_path(Path::new("/var/lib/neon/neon.db")));
@@ -704,21 +731,28 @@ mod tests {
 //nas/public /mnt/smb cifs rw 0 0
 ";
         assert_eq!(
-            detect_mount_fstype_from_proc_mounts(Path::new("/mnt/nfs_share/data/neon.db"), sample_mounts).as_deref(),
+            detect_mount_fstype_from_proc_mounts(
+                Path::new("/mnt/nfs_share/data/neon.db"),
+                sample_mounts
+            )
+            .as_deref(),
             Some("nfs4")
         );
         assert_eq!(
-            detect_mount_fstype_from_proc_mounts(Path::new("/mnt/smb/neon.db"), sample_mounts).as_deref(),
+            detect_mount_fstype_from_proc_mounts(Path::new("/mnt/smb/neon.db"), sample_mounts)
+                .as_deref(),
             Some("cifs")
         );
         assert_eq!(
-            detect_mount_fstype_from_proc_mounts(Path::new("/var/lib/neon/neon.db"), sample_mounts).as_deref(),
+            detect_mount_fstype_from_proc_mounts(Path::new("/var/lib/neon/neon.db"), sample_mounts)
+                .as_deref(),
             Some("ext4")
         );
     }
 
     #[tokio::test]
-    async fn verifies_bundled_sqlite_3_54_1_fts5_and_wal_at_runtime() -> Result<(), SqliteBootstrapError> {
+    async fn verifies_bundled_sqlite_3_54_1_fts5_and_wal_at_runtime()
+    -> Result<(), SqliteBootstrapError> {
         let tmp_path = std::env::temp_dir().join(format!("neon-pr03-{}.db", uuid::Uuid::now_v7()));
         let diag = verify_sqlite_runtime(&tmp_path, SqliteSynchronousMode::Full).await?;
         assert!(diag.fts5_enabled);

@@ -35,16 +35,15 @@ pub struct ApiError(pub AppError, pub CorrelationId);
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let problem: ProblemDetails = self.0.to_problem_details(Some(self.1));
-        let status = StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut res = (status, Json(problem)).into_response();
         res.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
-        res.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        );
+        res.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         res
     }
 }
@@ -125,10 +124,10 @@ async fn login_handler(
 ) -> Result<Response, ApiError> {
     let req_id = CorrelationId::generate();
     let prior = extract_session_cookie(&headers, &state.cookie_policy.cookie_name);
-    let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok());
-    let xff = headers
-        .get("x-forwarded-for")
+    let ua = headers
+        .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok());
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let x_real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
     let client_ip = state.ip_resolver.resolve(peer_addr.ip(), xff, x_real_ip);
     let client_ip_str = client_ip.to_string();

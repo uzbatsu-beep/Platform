@@ -53,7 +53,11 @@ async fn main() -> ExitCode {
             Ok(bundle) => {
                 println!(
                     "Database migrations {} (instance_id={})",
-                    if dry_run { "verified (dry-run)" } else { "applied" },
+                    if dry_run {
+                        "verified (dry-run)"
+                    } else {
+                        "applied"
+                    },
                     bundle.instance_id
                 );
                 ExitCode::SUCCESS

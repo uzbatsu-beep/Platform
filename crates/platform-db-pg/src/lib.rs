@@ -4,7 +4,6 @@
 //! fail-fast version checks, schema isolation (`core`, `mod_*`), real `TxContext` (`PgTxContext`),
 //! advisory-locked `PgMigrationRunner`, and lossless `UtcMillis <-> TIMESTAMPTZ` helpers.
 
-
 pub mod identity_repo;
 pub use identity_repo::PgIdentityStore;
 use std::any::Any;
@@ -109,7 +108,9 @@ pub struct PgServerDiagnostics {
 pub enum PgDbError {
     #[error("PostgreSQL connection/query error: {0}")]
     Sqlx(String),
-    #[error("PostgreSQL server version {version} (major {major}) is below supported baseline {MIN_POSTGRES_MAJOR_VERSION}")]
+    #[error(
+        "PostgreSQL server version {version} (major {major}) is below supported baseline {MIN_POSTGRES_MAJOR_VERSION}"
+    )]
     UnsupportedServerVersion { version: String, major: u32 },
     #[error("invalid PostgreSQL schema identifier '{0}'")]
     InvalidSchemaIdentifier(String),
@@ -155,13 +156,19 @@ impl PgTxContext {
 
     /// Commits all operations executed within this transaction atomically.
     pub async fn commit(&mut self) -> Result<(), PgDbError> {
-        let tx = self.tx.take().ok_or(PgDbError::TransactionAlreadyFinished)?;
+        let tx = self
+            .tx
+            .take()
+            .ok_or(PgDbError::TransactionAlreadyFinished)?;
         tx.commit().await.map_err(|e| sanitize_sqlx_error(&e))
     }
 
     /// Explicitly rolls back all operations executed within this transaction.
     pub async fn rollback(&mut self) -> Result<(), PgDbError> {
-        let tx = self.tx.take().ok_or(PgDbError::TransactionAlreadyFinished)?;
+        let tx = self
+            .tx
+            .take()
+            .ok_or(PgDbError::TransactionAlreadyFinished)?;
         tx.rollback().await.map_err(|e| sanitize_sqlx_error(&e))
     }
 }
@@ -217,7 +224,9 @@ impl PgDatabase {
         .map_err(|e| sanitize_sqlx_error(&e))?;
 
         let server_version: String = row.try_get("ver").map_err(|e| sanitize_sqlx_error(&e))?;
-        let ver_num: i32 = row.try_get("ver_num").map_err(|e| sanitize_sqlx_error(&e))?;
+        let ver_num: i32 = row
+            .try_get("ver_num")
+            .map_err(|e| sanitize_sqlx_error(&e))?;
         let major_version = (ver_num / 10_000).max(0) as u32;
 
         if major_version < MIN_POSTGRES_MAJOR_VERSION {
@@ -328,7 +337,10 @@ impl PgMigrationRunner {
     }
 
     /// Lists all recorded migrations in `core.core_module_migrations`.
-    pub async fn list_records(&self, namespace: &str) -> Result<Vec<MigrationRecord>, MigrationError> {
+    pub async fn list_records(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<MigrationRecord>, MigrationError> {
         validate_migration_namespace(namespace)?;
         self.ensure_ledger().await?;
         let rows = sqlx::query(
@@ -348,22 +360,36 @@ impl PgMigrationRunner {
 
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
-            let status_str: String = row.try_get("status").map_err(|e| MigrationError::Database(e.to_string()))?;
+            let status_str: String = row
+                .try_get("status")
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
             let status = match status_str.as_str() {
                 "applied" => MigrationStatus::Applied,
                 "in_progress" => MigrationStatus::InProgress,
                 _ => MigrationStatus::Failed,
             };
-            let version: i32 = row.try_get("version").map_err(|e| MigrationError::Database(e.to_string()))?;
-            let applied_ms: i64 = row.try_get("applied_ms").map_err(|e| MigrationError::Database(e.to_string()))?;
+            let version: i32 = row
+                .try_get("version")
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let applied_ms: i64 = row
+                .try_get("applied_ms")
+                .map_err(|e| MigrationError::Database(e.to_string()))?;
             records.push(MigrationRecord {
-                namespace: row.try_get("namespace").map_err(|e| MigrationError::Database(e.to_string()))?,
+                namespace: row
+                    .try_get("namespace")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
                 version: version.max(0) as u32,
-                name: row.try_get("name").map_err(|e| MigrationError::Database(e.to_string()))?,
-                checksum_sha256: row.try_get("checksum_sha256").map_err(|e| MigrationError::Database(e.to_string()))?,
+                name: row
+                    .try_get("name")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
+                checksum_sha256: row
+                    .try_get("checksum_sha256")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
                 applied_at: UtcMillis::from_unix_millis(applied_ms.max(0) as u64),
                 status,
-                error_message: row.try_get("error_message").map_err(|e| MigrationError::Database(e.to_string()))?,
+                error_message: row
+                    .try_get("error_message")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?,
             });
         }
         Ok(records)

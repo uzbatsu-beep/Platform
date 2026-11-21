@@ -348,7 +348,9 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
 
     // 7. Recovery CLI flow: resets password atomically, revokes all active sessions, records SecurityEvent
     let new_admin_pass = SecretString::new("RecoveredNeonAdmin2026!");
-    let recovered_id = bootstrap.reset_password(admin_username, &new_admin_pass).await?;
+    let recovered_id = bootstrap
+        .reset_password(admin_username, &new_admin_pass)
+        .await?;
     assert_eq!(recovered_id, admin_id);
     // Old session token is now invalid
     assert!(
@@ -362,7 +364,13 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
     );
     // Login with new password works; SecurityEvent recorded without plaintext
     let relogin = auth_svc
-        .login(admin_username, &new_admin_pass, Some("127.0.0.1"), None, None)
+        .login(
+            admin_username,
+            &new_admin_pass,
+            Some("127.0.0.1"),
+            None,
+            None,
+        )
         .await?;
     auth_svc.logout(relogin.session_id).await?;
     assert!(

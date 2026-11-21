@@ -35,3 +35,5 @@
 - GitHub Actions one-time reconciliation **PASS** (run [44905562613](https://github.com/uzbatsu-beep/Platform/actions/runs/44905562613)); `Cargo.lock` regenerated, rustfmt completed, temporary workflow removed in commit `64742d6`. Full required CI is still pending technical acceptance.
 
 - Post-reconciliation Rust Clippy exposed three platform-core compilation defects (renamed session repository field, incorrect Option handling in PHC parameter parsing, unused import); corrected in `9e5c071`. Follow-up CI must pass before acceptance.
+
+- GitHub compiler/Clippy audit found the archive had regressed PR-03 atomic PG/SQLite migration runners. Restored accepted ACID implementation from `main`, retained `core_{postgres,sqlite}_migrations()` helper via namespace-aware `MigrationSpec::new`, fixed `platform-core` Clippy, and explicitly wrapped six SQLx static-template PG Identity queries with `AssertSqlSafe` following audit. Further CI pending.

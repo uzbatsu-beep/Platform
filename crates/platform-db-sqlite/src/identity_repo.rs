@@ -206,9 +206,7 @@ impl IdentityRepository for SqliteIdentityStore {
 
             let mut results: Vec<User> = Vec::new();
             let mut seen: HashSet<UserId> = HashSet::new();
-            if include_self
-                && let Some(u) = self.find_user_by_id(caller_user_id).await?
-            {
+            if include_self && let Some(u) = self.find_user_by_id(caller_user_id).await? {
                 seen.insert(u.id);
                 results.push(u);
             }

@@ -1,0 +1,45 @@
+name: PR-04.1 one-time format and lockfile reconciliation
+on:
+  push:
+    branches:
+      - pr/04-1-identity-security-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.repository == 'uzbatsu-beep/Platform' && github.ref == 'refs/heads/pr/04-1-identity-security-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: pr/04-1-identity-security-hardening
+          persist-credentials: true
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt
+      - name: Reconcile workspace Cargo.lock
+        run: cargo update --workspace
+      - name: Apply pinned rustfmt
+        run: cargo fmt --all
+      - name: Verify formatter
+        run: cargo fmt --all -- --check
+      - name: Make one-time cleanup commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/pr04-1-one-time-format-and-lock.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No content changes produced'
+            exit 1
+          fi
+          git commit -m 'chore(pr-04.1): rustfmt and cargo update --workspace; remove temporary workflow'
+          git push origin HEAD:refs/heads/pr/04-1-identity-security-hardening

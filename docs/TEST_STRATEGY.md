@@ -2,11 +2,11 @@
 
 ## 1. Матрица тестирования и CI
 Каждый PR обязан проходить автоматические проверки:
-- **Rust:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo audit`, `cargo deny check`.
+- **Rust (действующий CI):** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, оба feature-профиля, `cargo test --workspace --locked`, `cargo-deny`. Отдельный `cargo audit` **не встроен** в текущий workflow; его результат не заявлять как PASS.
 - **Двойная/тройная матрица БД:** интеграционные тесты на **PostgreSQL 18** (baseline), **PostgreSQL 19** (compatibility) и **SQLite 3.54** (WAL + FTS5).
 - **Архитектурные проверки:** `check_arch_boundaries.py` (Core не зависит от `mod-*`, нет кросс-модульных SQL) и `check_airgapped_assets.py` (0 внешних URL в frontend-бандле).
-- **Контракт OpenAPI:** проверка синхронности OpenAPI 3.1 (`utoipa`) и сгенерированного TypeScript-клиента.
-- **Frontend:** `tsc --noEmit`, линтер, `vitest run`, `vite build`, `Playwright` E2E + `axe-core` a11y.
+- **Контракт OpenAPI (PR-05):** проверка OpenAPI 3.1 (`utoipa`) и TypeScript-клиента запланирована, пока не включена в обязательный CI.
+- **Frontend (действующий CI):** `pnpm install --frozen-lockfile`, typecheck, `vite build` и air-gapped scan. `lint`, Vitest, Playwright, axe-core — этапные задачи; не засчитывать их до внедрения.
 
 ## 2. Нагрузочные испытания и фиксация Baseline (Phase 1C)
 > Никакие численные показатели не заявляются как достигнутые без воспроизводимых замеров и публикации отчётов.
@@ -19,3 +19,9 @@
 | Загрузка/выдача вложений | Стабильная работа на лимитах по умолчанию (25/50 МБ) без OOM | Потоковый upload/download тест под конкурентной нагрузкой |
 | Параллельные операции и Outbox | 0 дедлоков/5xx, 0 дублей обработки событий | Тест конкурентных обновлений (`409`) и повторной доставки событий |
 | Согласованный Backup/Restore | 100% восстановление БД + вложений | Автоматический цикл `backup -> wipe -> restore -> verify` в CI |
+
+## 3. Устойчивость конкурентного bootstrap (PR-04.2)
+- Конкурентные вызовы `tokio::join!` не должны предполагать фиксированный порядок. Использовать фактические `UserId` и имя победившего пользователя для последующих login/recovery проверок.
+- `rust-quality-and-build` на **Ubuntu и Windows** запускает штатный workspace test, затем **10 последовательных повторов** `sqlite_full_pr04_identity_rbac_and_negative_security_suite` с `--exact`.
+- Критерий: **10/10 успешных повторов на каждой ОС** плюс **7/7** обязательных checks на одном SHA, затем отдельный успешный post-merge CI `main`.
+- Сохраняется атомарность: ровно один bootstrap успешен, другой возвращает `ConflictDomainState`.

@@ -25,17 +25,17 @@
 - **Real CLI Binary E2E (`neon` binary):** `crates/platform-server/tests/cli_e2e.rs`.
 
 
-## 4. GitHub CI reconciliation (2026-11-21)
+## 4. Подтверждённая приёмка PR-04.1 (21.11.2026)
 
-- Draft PR #6 created from the full 36-file source archive, exact Git blob checksums matched.
-- Initial required checks found rustfmt differences and a stale workspace Cargo.lock (locked PostgreSQL jobs fail without regeneration).
-- A temporary branch-scoped workflow is used to execute `cargo update --workspace` and `cargo fmt --all` with pinned Rust 1.100.0; it must delete itself before the final code review.
-- Tests are **not accepted** until all seven required status checks pass on the same final HEAD; technical acceptance also requires review of real HTTP/CLI runtime and scoped RBAC negative tests.
+- [PR #6](https://github.com/uzbatsu-beep/Platform/pull/6) слит через squash в `42c90e8`.
+- На финальном HEAD PR #6 `c664515` успешно завершились **7/7** проверок: [Rust/PG](https://github.com/uzbatsu-beep/Platform/actions/runs/44907581838) и [Frontend](https://github.com/uzbatsu-beep/Platform/actions/runs/44907581847).
+- Squash commit и последний HEAD PR #6 содержат **идентичное Git-дерево `3915369`**.
+- Однако отдельный [post-merge push-CI `main`](https://github.com/uzbatsu-beep/Platform/actions/runs/44908913799) завершился **5/7 PASS**: Rust Linux/Windows — FAIL из-за недетерминированного SQLite bootstrap-теста; остальные пять — PASS. Следовательно, устойчивость ещё не была доказана.
 
-- GitHub Actions one-time reconciliation **PASS** (run [44905562613](https://github.com/uzbatsu-beep/Platform/actions/runs/44905562613)); `Cargo.lock` regenerated, rustfmt completed, temporary workflow removed in commit `64742d6`. Full required CI is still pending technical acceptance.
+## 5. PR-04.2 — исправление обнаруженной нестабильности (ожидает приёмки)
 
-- Post-reconciliation Rust Clippy exposed three platform-core compilation defects (renamed session repository field, incorrect Option handling in PHC parameter parsing, unused import); corrected in `9e5c071`. Follow-up CI must pass before acceptance.
-
-- GitHub compiler/Clippy audit found the archive had regressed PR-03 atomic PG/SQLite migration runners. Restored accepted ACID implementation from `main`, retained `core_{postgres,sqlite}_migrations()` helper via namespace-aware `MigrationSpec::new`, fixed `platform-core` Clippy, and explicitly wrapped six SQLx static-template PG Identity queries with `AssertSqlSafe` following audit. Further CI pending.
-
-- Follow-up Rust/PG CI exposed duplicate `identity_repo` exports after restoring accepted PR-03 adapters; deduplicated them. PR remains Draft and requires renewed seven-check CI.
+- `sqlite_full_pr04_identity_rbac_and_negative_security_suite` принимает успех любого из `admin`/`admin2` при конкурентном bootstrap, но исходно выполнял последующий login и reset-password исключительно для `admin`. При победе `admin2` получался ожидаемый 401 и падал тест.
+- Исправление: хранить и использовать пару `(admin_id, admin_username)` фактического победителя во всех последующих проверках (вход, сессия, восстановление пароля); сохранить отрицательную проверку второго конкурентного bootstrap.
+- Регрессионная защита: после обычного workspace test в **каждом** обязательном Rust CI на Ubuntu/Windows повторять этот SQLite-тест **10 раз**.
+- Статусы серии и семи checks засчитываются только после фактического выполнения на финальном SHA PR; после squash merge дополнительно проверяется push-CI `main`.
+- Отдельный security review и проверка TLS/reverse proxy перед промышленной эксплуатацией остаются обязательными; этот тестовый фикс не заменяет их.

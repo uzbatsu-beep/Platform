@@ -88,10 +88,16 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
         bootstrap.init_first_admin("admin", "Главный администратор", &admin_pass),
         bootstrap.init_first_admin("admin2", "Второй администратор", &admin_pass),
     );
-    let admin_id = match (b1, b2) {
-        (Ok(id), Err(e)) | (Err(e), Ok(id)) => {
+    // Either concurrent call may win. Carry the winning username through all
+    // authentication and recovery assertions instead of assuming "admin" won.
+    let (admin_id, admin_username) = match (b1, b2) {
+        (Ok(id), Err(e)) => {
             assert_eq!(e.code(), ErrorCode::ConflictDomainState);
-            id
+            (id, "admin")
+        }
+        (Err(e), Ok(id)) => {
+            assert_eq!(e.code(), ErrorCode::ConflictDomainState);
+            (id, "admin2")
         }
         other => {
             return Err(format!("expected exactly one bootstrap to succeed, got {other:?}").into());
@@ -101,7 +107,7 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
     // 2. Authentication: valid login, session fixation rotation, wrong password, unknown user, rate limit
     let login1 = auth_svc
         .login(
-            "admin",
+            admin_username,
             &admin_pass,
             Some("127.0.0.1"),
             Some("test-agent"),
@@ -115,7 +121,7 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
     // Session fixation test: login with prior session rotates and revokes prior token
     let login2 = auth_svc
         .login(
-            "admin",
+            admin_username,
             &admin_pass,
             Some("127.0.0.1"),
             Some("test-agent"),
@@ -342,7 +348,9 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
 
     // 7. Recovery CLI flow: resets password atomically, revokes all active sessions, records SecurityEvent
     let new_admin_pass = SecretString::new("RecoveredNeonAdmin2026!");
-    let recovered_id = bootstrap.reset_password("admin", &new_admin_pass).await?;
+    let recovered_id = bootstrap
+        .reset_password(admin_username, &new_admin_pass)
+        .await?;
     assert_eq!(recovered_id, admin_id);
     // Old session token is now invalid
     assert!(
@@ -356,7 +364,13 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
     );
     // Login with new password works; SecurityEvent recorded without plaintext
     let relogin = auth_svc
-        .login("admin", &new_admin_pass, Some("127.0.0.1"), None, None)
+        .login(
+            admin_username,
+            &new_admin_pass,
+            Some("127.0.0.1"),
+            None,
+            None,
+        )
         .await?;
     auth_svc.logout(relogin.session_id).await?;
     assert!(

@@ -5,12 +5,21 @@
 
 ## Phase 1: MVP (разделена на 3 этапа)
 
-### Phase 1A — Foundation (PR-01 завершён `0bf1589`; далее PR-02 — PR-07)
-- **[ЗАВЕРШЕНО — PR-01, `0bf1589`]:** каркас репозитория, Rust 1.100.0, `Cargo.lock` + `frontend/pnpm-lock.yaml`, SQLite 3.54.1 (`libsqlite3-sys = "=0.39.1"`, `synchronous = FULL`), `platform-cli-core`, CI на Linux/Windows (5/5 проверок успешно), активный Ruleset `27744630`.
-- `platform-sdk` (`ModuleManifest`, `QueryPort`, `CommandPort`, `EventEnvelope`, `UUIDv7`, `source_instance_id`, `schema_version`).
-- `platform-core` + `platform-db-pg` + `platform-db-sqlite`: `AuthProvider` (Argon2id + сессии), `neon-cli` (admin init/recovery), RBAC по `Site`/`Department`, оргструктура, `ModuleRegistry`, **Transactional Outbox (с retry/DLQ и идемпотентностью)**, аудит с настраиваемой ретенцией, безопасные вложения (immutable SHA-256), поиск PG/FTS5, согласованный бэкап, OpenAPI 3.1.
-- Frontend **Engineering Workspace Shell (Вариант C)** + i18n (RU) + локальные ресурсы + встраивание SPA (`embed-ui` / `rust-embed`) в Standalone-бинарник `neon` (PR-07, ADR-011).
-- **DoD Phase 1A:** ядро запускается в Standalone и Server, все базовые тесты и CI зелёные.
+### Phase 1A — Foundation (PR-01—PR-04.1 слиты, PR-04.2 на проверке)
+**В `main` реализовано:**
+- PR-01 (`0bf1589`): Cargo Workspace, Rust 1.100.0, lock-файлы, CI.
+- PR-02 (`376616d`): SDK, манифесты, UUIDv7, RBAC-контракты и порты.
+- PR-03 (`56034dc`): PostgreSQL 18/19, SQLite 3.54.1, транзакционные миграции, ModuleRegistry.
+- PR-04 (`dcc7a02`): Identity/AuthProvider, Argon2id, Scoped RBAC, оргструктура.
+- PR-04.1 (`42c90e8`): HTTP/CLI runtime, client IP/rate-limit, исправления IDOR, E2E.
+
+**Блокер CI:** post-merge Rust Linux/Windows — FAIL из-за гонки в SQLite-тесте: победителем bootstrap может быть `admin2`, а тест входит как `admin`. PR-04.2 использует имя реального победителя и добавляет 10 повторов на обеих ОС.
+
+**Остаётся реализовать:**
+- PR-05 — Transactional Outbox, retry/DLQ, аудит, `/health/ready`, OpenAPI 3.1 / TS-клиент.
+- PR-06 — Blob Store, поиск, согласованный Backup/Restore.
+- PR-07 — Engineering Workspace Shell, i18n RU, встраивание SPA, frontend E2E.
+- **DoD:** семь обязательных CI-проверок на итоговом `main` зелёные; готовность к производственной эксплуатации оценивается отдельно.
 
 ### Phase 1B — Vertical Slice: `mod-equipment` (PR-08 — PR-09)
 - Полноценный прикладной модуль «Реестр и паспорт оборудования»: иерархия узлов, виртуализированная таблица, карточка + Inspector, безопасные вложения (PDF/PNG/JPG/DXF/DWG), история через Outbox, виджеты Dashboard.

@@ -1,4 +1,4 @@
-# Локальная сборка и проверка NEON (PR-01)
+# Локальная сборка и проверка NEON (Foundation)
 
 ## Предварительные требования
 - **Rust:** `1.100.0` (`rust-toolchain.toml`).
@@ -24,6 +24,17 @@ cargo check -p platform-cli --locked
 cargo test --workspace --locked
 cargo deny check
 ```
+
+### Проверка устойчивости конкурентного bootstrap (PR-04.2)
+После `cargo test --workspace --locked` выполнить на каждой целевой ОС (Bash / Windows Git Bash):
+
+```bash
+for i in {1..10}; do
+  cargo test -p platform-db-sqlite --test identity_rbac_integration sqlite_full_pr04_identity_rbac_and_negative_security_suite --locked -- --exact || exit 1
+done
+```
+
+Требование: 10/10 PASS, включая проверку конкурентного создания первого администратора, вход, отзыв сессий и password recovery.
 
 ## 3. Проверка Frontend (frozen lockfile)
 ```bash

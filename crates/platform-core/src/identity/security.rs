@@ -278,12 +278,11 @@ impl ClientIpResolver {
             return chain[0];
         }
 
-        if let Some(raw_real) = x_real_ip {
-            if raw_real.len() <= 64 {
-                if let Ok(parsed) = raw_real.trim().parse::<IpAddr>() {
-                    return parsed;
-                }
-            }
+        if let Some(raw_real) = x_real_ip
+            && raw_real.len() <= 64
+            && let Ok(parsed) = raw_real.trim().parse::<IpAddr>()
+        {
+            return parsed;
         }
 
         peer_ip
@@ -383,10 +382,10 @@ impl LoginRateLimiter {
                     }
                     !q.is_empty()
                 });
-                if guard.len() >= self.config.max_tracked_keys {
-                    if let Some(first_key) = guard.keys().next().cloned() {
-                        guard.remove(&first_key);
-                    }
+                if guard.len() >= self.config.max_tracked_keys
+                    && let Some(first_key) = guard.keys().next().cloned()
+                {
+                    guard.remove(&first_key);
                 }
             }
             for key in [

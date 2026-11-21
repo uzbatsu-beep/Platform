@@ -48,7 +48,7 @@ impl AuthenticationService {
         Self {
             provider,
             identity_repo,
-            session_repo: session_repo,
+            session_repo,
             rate_limiter,
             session_policy,
         }
@@ -227,7 +227,7 @@ pub fn authorize_assignment_revocation(
 /// Application service enforcing Scoped RBAC, delegation bounds, and last-admin protection.
 pub struct AuthorizationService {
     identity_repo: Arc<dyn IdentityRepository>,
-    session_repo: Arc<dyn SessionRepository>,
+    _session_repo: Arc<dyn SessionRepository>,
     org_repo: Arc<dyn OrganizationRepository>,
     hasher: PasswordHasherService,
     instance_id: SourceInstanceId,
@@ -244,7 +244,7 @@ impl AuthorizationService {
     ) -> Self {
         Self {
             identity_repo,
-            session_repo,
+            _session_repo: session_repo,
             org_repo,
             hasher,
             instance_id,
@@ -521,16 +521,15 @@ impl OrganizationService {
             .map_err(|e| AppError::internal(e.to_string()))?;
         ctx.require_permission(&perm, &Scope::Site { site_id })?;
 
-        if let Some(parent_id) = parent_department_id {
-            if !self
+        if let Some(parent_id) = parent_department_id
+            && !self
                 .org_repo
                 .department_belongs_to_site(parent_id, site_id)
                 .await?
-            {
-                return Err(AppError::validation(
-                    "Parent department does not belong to target site",
-                ));
-            }
+        {
+            return Err(AppError::validation(
+                "Parent department does not belong to target site",
+            ));
         }
         let now = UtcMillis::now();
         self.org_repo

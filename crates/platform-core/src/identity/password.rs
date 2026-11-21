@@ -192,11 +192,11 @@ impl PasswordHasherService {
     /// Runs a real Argon2id verification against a dummy hash when user is absent to reduce
     /// timing-based username enumeration.
     pub fn verify_dummy(&self, password: &SecretString) {
-        if let Ok(parsed) = PasswordHash::new(&self.dummy_phc) {
-            if let Ok(params) = self.config.validate() {
-                let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-                let _ = argon2.verify_password(password.expose_secret().as_bytes(), &parsed);
-            }
+        if let Ok(parsed) = PasswordHash::new(&self.dummy_phc)
+            && let Ok(params) = self.config.validate()
+        {
+            let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+            let _ = argon2.verify_password(password.expose_secret().as_bytes(), &parsed);
         }
     }
 

@@ -31,7 +31,7 @@ pub struct LoginOutcome {
 pub struct AuthenticationService {
     provider: Arc<dyn AuthProvider>,
     identity_repo: Arc<dyn IdentityRepository>,
-    _session_repo: Arc<dyn SessionRepository>,
+    session_repo: Arc<dyn SessionRepository>,
     rate_limiter: Arc<LoginRateLimiter>,
     session_policy: SessionPolicy,
 }
@@ -48,7 +48,7 @@ impl AuthenticationService {
         Self {
             provider,
             identity_repo,
-            _session_repo: session_repo,
+            session_repo: session_repo,
             rate_limiter,
             session_policy,
         }

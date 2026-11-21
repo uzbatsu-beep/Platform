@@ -209,9 +209,9 @@ impl PasswordHasherService {
     }
 
     fn phc_needs_rehash(&self, parsed: &PasswordHash<'_>) -> bool {
-        let m = parsed.params.get_decimal("m").ok();
-        let t = parsed.params.get_decimal("t").ok();
-        let p = parsed.params.get_decimal("p").ok();
+        let m = parsed.params.get_decimal("m");
+        let t = parsed.params.get_decimal("t");
+        let p = parsed.params.get_decimal("p");
         parsed.algorithm.as_str() != "argon2id"
             || m != Some(self.config.m_cost_kib)
             || t != Some(self.config.t_cost)

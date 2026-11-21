@@ -557,7 +557,6 @@ impl ModuleMigrator for PgMigrationRunner {
     }
 }
 
-
 /// Embedded Core migration list. Preserves the accepted PR-03 ACID migration runner.
 #[must_use]
 pub fn core_postgres_migrations() -> Vec<MigrationSpec> {

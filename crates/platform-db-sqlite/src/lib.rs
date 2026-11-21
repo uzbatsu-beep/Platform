@@ -660,7 +660,6 @@ impl ModuleMigrator for SqliteMigrationRunner {
     }
 }
 
-
 /// Embedded Core migration list. Preserves the accepted PR-03 ACID migration runner.
 #[must_use]
 pub fn core_sqlite_migrations() -> Vec<MigrationSpec> {

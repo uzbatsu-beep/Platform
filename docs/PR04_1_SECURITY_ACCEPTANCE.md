@@ -31,3 +31,5 @@
 - Initial required checks found rustfmt differences and a stale workspace Cargo.lock (locked PostgreSQL jobs fail without regeneration).
 - A temporary branch-scoped workflow is used to execute `cargo update --workspace` and `cargo fmt --all` with pinned Rust 1.100.0; it must delete itself before the final code review.
 - Tests are **not accepted** until all seven required status checks pass on the same final HEAD; technical acceptance also requires review of real HTTP/CLI runtime and scoped RBAC negative tests.
+
+- GitHub Actions one-time reconciliation **PASS** (run [44905562613](https://github.com/uzbatsu-beep/Platform/actions/runs/44905562613)); `Cargo.lock` regenerated, rustfmt completed, temporary workflow removed in commit `64742d6`. Full required CI is still pending technical acceptance.

@@ -28,10 +28,8 @@ fn run_neon_with_stdin(
         .stderr(Stdio::piped());
 
     let mut child = cmd.spawn()?;
-    if let Some(input) = stdin_payload {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input.as_bytes())?;
-        }
+    if let (Some(input), Some(mut stdin)) = (stdin_payload, child.stdin.take()) {
+        stdin.write_all(input.as_bytes())?;
     }
     let output = child.wait_with_output()?;
     Ok(output)

@@ -350,7 +350,7 @@ impl IdentityRepository for PgIdentityStore {
             }
 
             let sel = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
-            let existing = sqlx::query(AssertSqlSafe(sel))
+            let existing = sqlx::query(AssertSqlSafe(sel.clone()))
                 .bind(target_user_id.as_uuid())
                 .fetch_optional(&mut *tx)
                 .await

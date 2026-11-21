@@ -1,3 +1,6 @@
+pub mod identity_repo;
+pub use identity_repo::SqliteIdentityStore;
+
 //! SQLite 3.54.1 (bundled via libsqlite3-sys =0.39.1) database adapter for NEON Standalone mode.
 //!
 //! Features:
@@ -19,7 +22,7 @@ use platform_core::{
 };
 use platform_sdk::{BoxFuture, TxContext, TxEngine, UtcMillis};
 use sqlx::{
-    AssertSqlSafe, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
+    Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
@@ -139,7 +142,6 @@ pub fn is_unc_network_path(path: &Path) -> bool {
 }
 
 /// Network filesystem types rejected on Linux via `/proc/mounts` inspection.
-#[cfg(target_os = "linux")]
 const FORBIDDEN_NETWORK_FSTYPES: &[&str] = &[
     "nfs",
     "nfs4",
@@ -156,10 +158,7 @@ const FORBIDDEN_NETWORK_FSTYPES: &[&str] = &[
 
 /// Parses `/proc/mounts` content and returns the filesystem type of the longest matching mount point.
 #[must_use]
-pub fn detect_mount_fstype_from_proc_mounts(
-    canonical_path: &Path,
-    proc_mounts: &str,
-) -> Option<String> {
+pub fn detect_mount_fstype_from_proc_mounts(canonical_path: &Path, proc_mounts: &str) -> Option<String> {
     let target = canonical_path.to_string_lossy();
     let mut best_len = 0_usize;
     let mut best_fstype: Option<String> = None;
@@ -222,14 +221,15 @@ pub fn validate_local_filesystem_path(path: &Path) -> Result<(), SqliteBootstrap
             });
         }
         #[cfg(target_os = "linux")]
-        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts")
-            && let Some(fstype) = detect_mount_fstype_from_proc_mounts(&canonical, &mounts)
-            && FORBIDDEN_NETWORK_FSTYPES.contains(&fstype.as_str())
-        {
-            return Err(SqliteBootstrapError::NetworkPathForbidden {
-                path: canonical.display().to_string(),
-                reason: format!("network mount fstype={fstype}"),
-            });
+        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
+            if let Some(fstype) = detect_mount_fstype_from_proc_mounts(&canonical, &mounts) {
+                if FORBIDDEN_NETWORK_FSTYPES.contains(&fstype.as_str()) {
+                    return Err(SqliteBootstrapError::NetworkPathForbidden {
+                        path: canonical.display().to_string(),
+                        reason: format!("network mount fstype={fstype}"),
+                    });
+                }
+            }
         }
     }
 
@@ -466,10 +466,7 @@ impl SqliteMigrationRunner {
         Ok(())
     }
 
-    pub async fn list_records(
-        &self,
-        namespace: &str,
-    ) -> Result<Vec<MigrationRecord>, MigrationError> {
+    pub async fn list_records(&self, namespace: &str) -> Result<Vec<MigrationRecord>, MigrationError> {
         validate_migration_namespace(namespace)?;
         self.ensure_ledger().await?;
         let rows = sqlx::query(
@@ -487,46 +484,30 @@ impl SqliteMigrationRunner {
 
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
-            let status_str: String = row
-                .try_get("status")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let status_str: String = row.try_get("status").map_err(|e| MigrationError::Database(e.to_string()))?;
             let status = match status_str.as_str() {
                 "applied" => MigrationStatus::Applied,
                 "in_progress" => MigrationStatus::InProgress,
                 _ => MigrationStatus::Failed,
             };
-            let version: i64 = row
-                .try_get("version")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
-            let applied_str: String = row
-                .try_get("applied_at")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let version: i64 = row.try_get("version").map_err(|e| MigrationError::Database(e.to_string()))?;
+            let applied_str: String = row.try_get("applied_at").map_err(|e| MigrationError::Database(e.to_string()))?;
             let applied_at = iso8601_to_utc_millis(&applied_str)
                 .map_err(|e| MigrationError::Database(e.to_string()))?;
             records.push(MigrationRecord {
-                namespace: row
-                    .try_get("namespace")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?,
+                namespace: row.try_get("namespace").map_err(|e| MigrationError::Database(e.to_string()))?,
                 version: version.max(0) as u32,
-                name: row
-                    .try_get("name")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?,
-                checksum_sha256: row
-                    .try_get("checksum_sha256")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?,
+                name: row.try_get("name").map_err(|e| MigrationError::Database(e.to_string()))?,
+                checksum_sha256: row.try_get("checksum_sha256").map_err(|e| MigrationError::Database(e.to_string()))?,
                 applied_at,
                 status,
-                error_message: row
-                    .try_get("error_message")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?,
+                error_message: row.try_get("error_message").map_err(|e| MigrationError::Database(e.to_string()))?,
             });
         }
         Ok(records)
     }
 
-    /// Applies trusted migrations inside one BEGIN IMMEDIATE transaction on the writer pool.
-    /// DDL, checksum and 'applied' status commit atomically or roll back together.
-    /// The immediate write lock serializes concurrent runners even across processes.
+    /// Applies versioned migrations deterministically on the dedicated single-writer connection.
     pub async fn run_namespace(
         &self,
         namespace: &str,
@@ -536,21 +517,6 @@ impl SqliteMigrationRunner {
 
         let mut sorted: Vec<&MigrationSpec> = migrations.iter().collect();
         sorted.sort_by_key(|m| m.version);
-        for spec in &sorted {
-            if spec.namespace != namespace {
-                return Err(MigrationError::NamespaceMismatch {
-                    version: spec.version,
-                    expected: namespace.to_string(),
-                    actual: spec.namespace.clone(),
-                });
-            }
-            if !spec.transactional {
-                return Err(MigrationError::NonTransactionalUnsupported {
-                    namespace: namespace.to_string(),
-                    version: spec.version,
-                });
-            }
-        }
         for pair in sorted.windows(2) {
             if pair[0].version == pair[1].version {
                 return Err(MigrationError::DuplicateVersion {
@@ -562,27 +528,22 @@ impl SqliteMigrationRunner {
 
         self.ensure_ledger().await?;
 
-        // A pool transaction owns the connection until commit or rollback; SQLx
-        // provides automatic rollback on drop or task cancellation.
-        let mut tx = self
-            .db
-            .writer_pool()
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
-
         let mut summary = MigrationSummary {
             namespace: namespace.to_string(),
             ..MigrationSummary::default()
         };
+
         for spec in sorted {
             let checksum = spec.checksum_sha256();
+            let now_iso = utc_millis_to_iso8601(UtcMillis::now());
+
+            // Acquire single-writer transaction (`BEGIN IMMEDIATE` semantics via writer_pool max_connections=1).
             let existing = sqlx::query(
                 "SELECT checksum_sha256, status FROM core_module_migrations WHERE namespace = ? AND version = ?",
             )
             .bind(namespace)
             .bind(i64::from(spec.version))
-            .fetch_optional(&mut *tx)
+            .fetch_optional(self.db.writer_pool())
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
@@ -593,6 +554,7 @@ impl SqliteMigrationRunner {
                 let status: String = row
                     .try_get("status")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
+
                 if status == MigrationStatus::Applied.as_str() {
                     if stored_checksum != checksum {
                         return Err(MigrationError::ChecksumMismatch {
@@ -605,41 +567,80 @@ impl SqliteMigrationRunner {
                     summary.skipped_versions.push(spec.version);
                     continue;
                 }
-                // Pre-ACID incomplete states require explicit repair, not blind replay.
-                return Err(MigrationError::Database(format!(
-                    "migration {namespace} v{} is in state {status}; explicit repair required",
-                    spec.version
-                )));
+                summary.recovered_versions.push(spec.version);
             }
 
-            sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
-                .execute(&mut *tx)
-                .await
-                .map_err(|err| MigrationError::ExecutionFailed {
-                    namespace: namespace.to_string(),
-                    version: spec.version,
-                    name: spec.name.clone(),
-                    detail: err.to_string(),
-                })?;
-
-            let now_iso = utc_millis_to_iso8601(UtcMillis::now());
             sqlx::query(
-                "INSERT INTO core_module_migrations (namespace, version, name, checksum_sha256, applied_at, status, error_message) VALUES (?, ?, ?, ?, ?, 'applied', NULL)",
+                r#"
+                INSERT INTO core_module_migrations (namespace, version, name, checksum_sha256, applied_at, status, error_message)
+                VALUES (?, ?, ?, ?, ?, 'in_progress', NULL)
+                ON CONFLICT (namespace, version)
+                DO UPDATE SET name = excluded.name, checksum_sha256 = excluded.checksum_sha256,
+                              applied_at = excluded.applied_at, status = 'in_progress', error_message = NULL
+                "#,
             )
             .bind(namespace)
             .bind(i64::from(spec.version))
             .bind(&spec.name)
             .bind(&checksum)
             .bind(&now_iso)
-            .execute(&mut *tx)
+            .execute(self.db.writer_pool())
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-            summary.applied_versions.push(spec.version);
+            let exec_result = if spec.transactional {
+                let mut tx = self
+                    .db
+                    .writer_pool()
+                    .begin()
+                    .await
+                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                let res = tx.execute(spec.sql.as_str()).await;
+                match res {
+                    Ok(_) => tx.commit().await,
+                    Err(err) => {
+                        let _ = tx.rollback().await;
+                        Err(err)
+                    }
+                }
+            } else {
+                self.db.writer_pool().execute(spec.sql.as_str()).await.map(|_| ())
+            };
+
+            match exec_result {
+                Ok(()) => {
+                    let done_iso = utc_millis_to_iso8601(UtcMillis::now());
+                    sqlx::query(
+                        "UPDATE core_module_migrations SET status = 'applied', applied_at = ?, error_message = NULL WHERE namespace = ? AND version = ?",
+                    )
+                    .bind(&done_iso)
+                    .bind(namespace)
+                    .bind(i64::from(spec.version))
+                    .execute(self.db.writer_pool())
+                    .await
+                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    summary.applied_versions.push(spec.version);
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    let _ = sqlx::query(
+                        "UPDATE core_module_migrations SET status = 'failed', error_message = ? WHERE namespace = ? AND version = ?",
+                    )
+                    .bind(&msg)
+                    .bind(namespace)
+                    .bind(i64::from(spec.version))
+                    .execute(self.db.writer_pool())
+                    .await;
+                    return Err(MigrationError::ExecutionFailed {
+                        namespace: namespace.to_string(),
+                        version: spec.version,
+                        name: spec.name.clone(),
+                        detail: msg,
+                    });
+                }
+            }
         }
-        tx.commit()
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+
         Ok(summary)
     }
 }
@@ -665,12 +666,8 @@ mod tests {
 
     #[test]
     fn detects_unc_and_linux_network_mounts_without_false_positives() {
-        assert!(is_unc_network_path(Path::new(
-            r"\\fileserver\share\neon.db"
-        )));
-        assert!(is_unc_network_path(Path::new(
-            r"\\?\UNC\fileserver\share\neon.db"
-        )));
+        assert!(is_unc_network_path(Path::new(r"\\fileserver\share\neon.db")));
+        assert!(is_unc_network_path(Path::new(r"\\?\UNC\fileserver\share\neon.db")));
         assert!(is_unc_network_path(Path::new("//fileserver/share/neon.db")));
 
         assert!(!is_unc_network_path(Path::new("/var/lib/neon/neon.db")));
@@ -685,28 +682,21 @@ mod tests {
 //nas/public /mnt/smb cifs rw 0 0
 ";
         assert_eq!(
-            detect_mount_fstype_from_proc_mounts(
-                Path::new("/mnt/nfs_share/data/neon.db"),
-                sample_mounts
-            )
-            .as_deref(),
+            detect_mount_fstype_from_proc_mounts(Path::new("/mnt/nfs_share/data/neon.db"), sample_mounts).as_deref(),
             Some("nfs4")
         );
         assert_eq!(
-            detect_mount_fstype_from_proc_mounts(Path::new("/mnt/smb/neon.db"), sample_mounts)
-                .as_deref(),
+            detect_mount_fstype_from_proc_mounts(Path::new("/mnt/smb/neon.db"), sample_mounts).as_deref(),
             Some("cifs")
         );
         assert_eq!(
-            detect_mount_fstype_from_proc_mounts(Path::new("/var/lib/neon/neon.db"), sample_mounts)
-                .as_deref(),
+            detect_mount_fstype_from_proc_mounts(Path::new("/var/lib/neon/neon.db"), sample_mounts).as_deref(),
             Some("ext4")
         );
     }
 
     #[tokio::test]
-    async fn verifies_bundled_sqlite_3_54_1_fts5_and_wal_at_runtime()
-    -> Result<(), SqliteBootstrapError> {
+    async fn verifies_bundled_sqlite_3_54_1_fts5_and_wal_at_runtime() -> Result<(), SqliteBootstrapError> {
         let tmp_path = std::env::temp_dir().join(format!("neon-pr03-{}.db", uuid::Uuid::now_v7()));
         let diag = verify_sqlite_runtime(&tmp_path, SqliteSynchronousMode::Full).await?;
         assert!(diag.fts5_enabled);

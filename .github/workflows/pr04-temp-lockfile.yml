@@ -1,0 +1,23 @@
+name: PR04 temporary lockfile generation
+on:
+  push:
+    branches:
+      - pr/04-identity-auth-rbac
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.100.0'
+      - name: Resolve Cargo.lock for approved PR04 dependencies
+        shell: bash
+        run: |
+          cargo generate-lockfile
+          printf 'NEON_PR04_LOCK_BEGIN\n'
+          cat Cargo.lock
+          printf 'NEON_PR04_LOCK_END\n'

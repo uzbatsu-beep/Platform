@@ -55,7 +55,10 @@ async fn open_admin_service(
                 .path
                 .as_ref()
                 .ok_or_else(|| AppError::validation("Missing SQLite database.path"))?;
-            if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     AppError::internal(format!("Failed to create SQLite directory: {e}"))
                 })?;

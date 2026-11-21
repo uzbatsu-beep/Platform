@@ -10,6 +10,7 @@
 
 pub mod identity_repo;
 pub use identity_repo::SqliteIdentityStore;
+
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,7 +22,7 @@ use platform_core::{
 };
 use platform_sdk::{BoxFuture, TxContext, TxEngine, UtcMillis};
 use sqlx::{
-    Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
+    AssertSqlSafe, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
@@ -141,6 +142,7 @@ pub fn is_unc_network_path(path: &Path) -> bool {
 }
 
 /// Network filesystem types rejected on Linux via `/proc/mounts` inspection.
+#[cfg(target_os = "linux")]
 const FORBIDDEN_NETWORK_FSTYPES: &[&str] = &[
     "nfs",
     "nfs4",
@@ -223,15 +225,14 @@ pub fn validate_local_filesystem_path(path: &Path) -> Result<(), SqliteBootstrap
             });
         }
         #[cfg(target_os = "linux")]
-        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
-            if let Some(fstype) = detect_mount_fstype_from_proc_mounts(&canonical, &mounts) {
-                if FORBIDDEN_NETWORK_FSTYPES.contains(&fstype.as_str()) {
-                    return Err(SqliteBootstrapError::NetworkPathForbidden {
-                        path: canonical.display().to_string(),
-                        reason: format!("network mount fstype={fstype}"),
-                    });
-                }
-            }
+        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts")
+            && let Some(fstype) = detect_mount_fstype_from_proc_mounts(&canonical, &mounts)
+            && FORBIDDEN_NETWORK_FSTYPES.contains(&fstype.as_str())
+        {
+            return Err(SqliteBootstrapError::NetworkPathForbidden {
+                path: canonical.display().to_string(),
+                reason: format!("network mount fstype={fstype}"),
+            });
         }
     }
 
@@ -526,7 +527,9 @@ impl SqliteMigrationRunner {
         Ok(records)
     }
 
-    /// Applies versioned migrations deterministically on the dedicated single-writer connection.
+    /// Applies trusted migrations inside one BEGIN IMMEDIATE transaction on the writer pool.
+    /// DDL, checksum and 'applied' status commit atomically or roll back together.
+    /// The immediate write lock serializes concurrent runners even across processes.
     pub async fn run_namespace(
         &self,
         namespace: &str,
@@ -536,6 +539,21 @@ impl SqliteMigrationRunner {
 
         let mut sorted: Vec<&MigrationSpec> = migrations.iter().collect();
         sorted.sort_by_key(|m| m.version);
+        for spec in &sorted {
+            if spec.namespace != namespace {
+                return Err(MigrationError::NamespaceMismatch {
+                    version: spec.version,
+                    expected: namespace.to_string(),
+                    actual: spec.namespace.clone(),
+                });
+            }
+            if !spec.transactional {
+                return Err(MigrationError::NonTransactionalUnsupported {
+                    namespace: namespace.to_string(),
+                    version: spec.version,
+                });
+            }
+        }
         for pair in sorted.windows(2) {
             if pair[0].version == pair[1].version {
                 return Err(MigrationError::DuplicateVersion {
@@ -547,22 +565,27 @@ impl SqliteMigrationRunner {
 
         self.ensure_ledger().await?;
 
+        // A pool transaction owns the connection until commit or rollback; SQLx
+        // provides automatic rollback on drop or task cancellation.
+        let mut tx = self
+            .db
+            .writer_pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
+
         let mut summary = MigrationSummary {
             namespace: namespace.to_string(),
             ..MigrationSummary::default()
         };
-
         for spec in sorted {
             let checksum = spec.checksum_sha256();
-            let now_iso = utc_millis_to_iso8601(UtcMillis::now());
-
-            // Acquire single-writer transaction (`BEGIN IMMEDIATE` semantics via writer_pool max_connections=1).
             let existing = sqlx::query(
                 "SELECT checksum_sha256, status FROM core_module_migrations WHERE namespace = ? AND version = ?",
             )
             .bind(namespace)
             .bind(i64::from(spec.version))
-            .fetch_optional(self.db.writer_pool())
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
@@ -573,7 +596,6 @@ impl SqliteMigrationRunner {
                 let status: String = row
                     .try_get("status")
                     .map_err(|e| MigrationError::Database(e.to_string()))?;
-
                 if status == MigrationStatus::Applied.as_str() {
                     if stored_checksum != checksum {
                         return Err(MigrationError::ChecksumMismatch {
@@ -586,84 +608,41 @@ impl SqliteMigrationRunner {
                     summary.skipped_versions.push(spec.version);
                     continue;
                 }
-                summary.recovered_versions.push(spec.version);
+                // Pre-ACID incomplete states require explicit repair, not blind replay.
+                return Err(MigrationError::Database(format!(
+                    "migration {namespace} v{} is in state {status}; explicit repair required",
+                    spec.version
+                )));
             }
 
+            sqlx::raw_sql(AssertSqlSafe(spec.sql.clone()))
+                .execute(&mut *tx)
+                .await
+                .map_err(|err| MigrationError::ExecutionFailed {
+                    namespace: namespace.to_string(),
+                    version: spec.version,
+                    name: spec.name.clone(),
+                    detail: err.to_string(),
+                })?;
+
+            let now_iso = utc_millis_to_iso8601(UtcMillis::now());
             sqlx::query(
-                r#"
-                INSERT INTO core_module_migrations (namespace, version, name, checksum_sha256, applied_at, status, error_message)
-                VALUES (?, ?, ?, ?, ?, 'in_progress', NULL)
-                ON CONFLICT (namespace, version)
-                DO UPDATE SET name = excluded.name, checksum_sha256 = excluded.checksum_sha256,
-                              applied_at = excluded.applied_at, status = 'in_progress', error_message = NULL
-                "#,
+                "INSERT INTO core_module_migrations (namespace, version, name, checksum_sha256, applied_at, status, error_message) VALUES (?, ?, ?, ?, ?, 'applied', NULL)",
             )
             .bind(namespace)
             .bind(i64::from(spec.version))
             .bind(&spec.name)
             .bind(&checksum)
             .bind(&now_iso)
-            .execute(self.db.writer_pool())
+            .execute(&mut *tx)
             .await
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-            let exec_result = if spec.transactional {
-                let mut tx = self
-                    .db
-                    .writer_pool()
-                    .begin()
-                    .await
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
-                let res = tx.execute(spec.sql.as_str()).await;
-                match res {
-                    Ok(_) => tx.commit().await,
-                    Err(err) => {
-                        let _ = tx.rollback().await;
-                        Err(err)
-                    }
-                }
-            } else {
-                self.db
-                    .writer_pool()
-                    .execute(spec.sql.as_str())
-                    .await
-                    .map(|_| ())
-            };
-
-            match exec_result {
-                Ok(()) => {
-                    let done_iso = utc_millis_to_iso8601(UtcMillis::now());
-                    sqlx::query(
-                        "UPDATE core_module_migrations SET status = 'applied', applied_at = ?, error_message = NULL WHERE namespace = ? AND version = ?",
-                    )
-                    .bind(&done_iso)
-                    .bind(namespace)
-                    .bind(i64::from(spec.version))
-                    .execute(self.db.writer_pool())
-                    .await
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
-                    summary.applied_versions.push(spec.version);
-                }
-                Err(err) => {
-                    let msg = err.to_string();
-                    let _ = sqlx::query(
-                        "UPDATE core_module_migrations SET status = 'failed', error_message = ? WHERE namespace = ? AND version = ?",
-                    )
-                    .bind(&msg)
-                    .bind(namespace)
-                    .bind(i64::from(spec.version))
-                    .execute(self.db.writer_pool())
-                    .await;
-                    return Err(MigrationError::ExecutionFailed {
-                        namespace: namespace.to_string(),
-                        version: spec.version,
-                        name: spec.name.clone(),
-                        detail: msg,
-                    });
-                }
-            }
+            summary.applied_versions.push(spec.version);
         }
-
+        tx.commit()
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?;
         Ok(summary)
     }
 }

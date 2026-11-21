@@ -32,7 +32,8 @@ async fn connect_pg_isolated_if_configured()
     };
     let admin_db = PgDatabase::connect_url(&url, 2).await?;
     let db_name = format!("neon_pr041_{}", uuid::Uuid::now_v7().simple());
-    sqlx::query(&format!("CREATE DATABASE {db_name}"))
+    // SQL identifier contains only a fixed ASCII prefix and UUIDv7 hexadecimal digits.
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
         .execute(admin_db.pool())
         .await?;
     admin_db.close().await;

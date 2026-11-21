@@ -15,7 +15,6 @@ use platform_db_sqlite::{
 };
 use platform_sdk::{
     CorrelationId, ErrorCode, PermissionKey, RowVersion, RuntimeMode, Scope, SourceInstanceId,
-    UtcMillis,
 };
 
 #[tokio::test]

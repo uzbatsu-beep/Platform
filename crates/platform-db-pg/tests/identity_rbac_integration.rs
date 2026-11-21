@@ -26,7 +26,7 @@ fn test_pg_url() -> Result<Option<String>, String> {
 #[tokio::test]
 async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
 -> Result<(), Box<dyn std::error::Error>> {
-    let Some(url) = test_pg_url().map_err(|e| e)? else {
+    let Some(url) = test_pg_url()? else {
         return Ok(());
     };
 
@@ -67,7 +67,7 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
 
     // Concurrent bootstrap on PostgreSQL (advisory-locked): exactly one succeeds or already initialized
     let admin_pass = SecretString::new("PgNeonAdminPass2026!");
-    let suffix = format!("{}", &uuid::Uuid::now_v7().simple().to_string()[..6]);
+    let suffix = uuid::Uuid::now_v7().simple().to_string()[..6].to_string();
     let admin_name = format!("pgadmin_{suffix}");
     bootstrap
         .init_first_admin(&admin_name, "PG Admin", &admin_pass)

@@ -13,3 +13,5 @@ clap.workspace = true
 platform-core.workspace = true
 platform-sdk.workspace = true
 rpassword.workspace = true
+serde.workspace = true
+toml.workspace = true

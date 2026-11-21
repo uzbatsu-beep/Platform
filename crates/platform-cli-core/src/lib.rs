@@ -1,5 +1,7 @@
-//! Shared administrative CLI definitions and secure interactive password-prompt helpers
-//! used by both the single Standalone binary (`neon`) and the dedicated Server utility (`neon-cli`).
+//! Shared administrative CLI definitions, runtime configuration loader, and secure password-prompt
+//! helpers used by both the single Standalone binary (`neon`) and the dedicated Server utility (`neon-cli`).
+
+pub mod config;
 
 use std::io::{self, BufRead, Write};
 
@@ -7,12 +9,10 @@ use clap::{Parser, Subcommand};
 use platform_core::identity::{AdminBootstrapService, SecretString};
 use platform_sdk::AppError;
 
+pub use config::{DatabaseSection, NeonRuntimeConfig, RuntimeSection, SecuritySection, TlsSection, ValidatedRuntimeConfig};
+
 #[derive(Debug, Parser)]
-#[command(
-    name = "neon",
-    version,
-    about = "NEON Engineering Platform CLI & Server"
-)]
+#[command(name = "neon", version, about = "NEON Engineering Platform CLI & Server")]
 pub struct NeonCli {
     /// Path to TOML configuration file
     #[arg(long, global = true, env = "NEON_CONFIG")]
@@ -78,11 +78,7 @@ pub enum BackupCommand {
 }
 
 /// Reads a password securely without terminal echo (or from stdin when `password_stdin = true`).
-pub fn read_secret_password(
-    prompt: &str,
-    confirm: bool,
-    password_stdin: bool,
-) -> Result<SecretString, AppError> {
+pub fn read_secret_password(prompt: &str, confirm: bool, password_stdin: bool) -> Result<SecretString, AppError> {
     if password_stdin {
         let mut line = String::new();
         io::stdin()
@@ -90,15 +86,17 @@ pub fn read_secret_password(
             .read_line(&mut line)
             .map_err(|e| AppError::internal(format!("failed to read password from stdin: {e}")))?;
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+        if trimmed.is_empty() {
+            return Err(AppError::validation("Password from stdin must not be empty"));
+        }
         return Ok(SecretString::new(trimmed));
     }
 
     let first = rpassword::prompt_password(prompt)
         .map_err(|e| AppError::internal(format!("failed to read password from terminal: {e}")))?;
     if confirm {
-        let second = rpassword::prompt_password("Confirm password: ").map_err(|e| {
-            AppError::internal(format!("failed to read password confirmation: {e}"))
-        })?;
+        let second = rpassword::prompt_password("Confirm password: ")
+            .map_err(|e| AppError::internal(format!("failed to read password confirmation: {e}")))?;
         if first != second {
             return Err(AppError::validation("Passwords do not match"));
         }
@@ -118,24 +116,17 @@ pub async fn execute_admin_command(
             display_name,
             password_stdin,
         } => {
-            let password = read_secret_password(
-                "Enter initial administrator password: ",
-                true,
-                *password_stdin,
-            )?;
+            let password = read_secret_password("Enter initial administrator password: ", true, *password_stdin)?;
             let user_id = service
                 .init_first_admin(username, display_name, &password)
                 .await?;
-            Ok(format!(
-                "Initialized global administrator '{username}' (user_id={user_id})"
-            ))
+            Ok(format!("Initialized global administrator '{username}' (user_id={user_id})"))
         }
         AdminCommand::ResetPassword {
             username,
             password_stdin,
         } => {
-            let new_password =
-                read_secret_password("Enter new administrator password: ", true, *password_stdin)?;
+            let new_password = read_secret_password("Enter new administrator password: ", true, *password_stdin)?;
             let user_id = service.reset_password(username, &new_password).await?;
             Ok(format!(
                 "Password reset completed and all active sessions revoked for '{username}' (user_id={user_id})"

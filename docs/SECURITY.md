@@ -31,3 +31,9 @@
 
 ## 5. Изоляция промышленного контура (OT/IT)
 Платформа работает в IT/MES-контуре; прямое управление оборудованием/ПЛК запрещено. Будущие промышленные интеграции (Phase 4) выносятся в изолированный read-only коллектор в DMZ.
+
+## PR-04.1 Security Hardening Baseline
+- Fail-fast валидация конфигурации (`NeonRuntimeConfig::validate`): запрет plain HTTP на non-loopback адресах в Standalone и запрет запуска Server без TLS или `behind_trusted_proxy = true`.
+- Защита от IP spoofing в `LoginRateLimiter`: `ClientIpResolver` игнорирует `X-Forwarded-For` / `X-Real-IP` от недоверенных peer IP.
+- Защита от IDOR и TOCTOU в `deactivate_user` и `revoke_assignment`: все проверки выполняются внутри транзакции БД по фактическим данным, без доверия клиентскому `target_scope`.
+- Защита Tokio executor от CPU/RAM-голодания: Argon2id выполняется в `spawn_blocking` под ограниченным семафором.

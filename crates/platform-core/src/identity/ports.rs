@@ -2,8 +2,8 @@
 //! Implemented independently by `platform-db-pg` (PostgreSQL 18/19) and `platform-db-sqlite` (SQLite 3.54.1).
 
 use platform_sdk::{
-    AppError, BoxFuture, DepartmentId, LocationId, PermissionGrant, PermissionKey, RoleId,
-    RowVersion, Scope, SiteId, UserId, UtcMillis,
+    AppError, AuthContext, BoxFuture, DepartmentId, LocationId, OrganizationId, PermissionGrant,
+    PermissionKey, RoleId, RowVersion, Scope, SiteId, UserId, UtcMillis,
 };
 use uuid::Uuid;
 
@@ -38,9 +38,14 @@ pub trait IdentityRepository: Send + Sync {
         now: UtcMillis,
     ) -> BoxFuture<'a, Result<(), AppError>>;
 
-    /// Transactional deactivation with last-active-global-admin protection.
-    fn deactivate_user_checked<'a>(
+    /// Transactional deactivation eliminating IDOR & TOCTOU:
+    /// 1. Loads target user and ALL active assignment scopes inside the DB transaction.
+    /// 2. Authorizes `caller_ctx` against actual scopes (NEVER client-supplied scope).
+    /// 3. Enforces last-active-global-admin invariant under transaction lock.
+    /// 4. Deactivates user AND revokes all active sessions atomically in the same transaction.
+    fn deactivate_user_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         target_user_id: UserId,
         expected_row_version: RowVersion,
         is_if_match: bool,
@@ -56,9 +61,13 @@ pub trait IdentityRepository: Send + Sync {
         assignment: RoleAssignment,
     ) -> BoxFuture<'a, Result<RoleAssignment, AppError>>;
 
-    /// Transactional removal of a role assignment with last-active-global-admin protection.
-    fn revoke_assignment_checked<'a>(
+    /// Transactional removal of a role assignment eliminating IDOR & TOCTOU:
+    /// 1. Loads actual assignment (`user_id`, `role_id`, `scope`) and role permissions inside tx.
+    /// 2. Verifies `caller_ctx` holds `core:role:manage` AND every permission of the role covering actual `scope`.
+    /// 3. Enforces last-active-global-admin invariant before deleting.
+    fn revoke_assignment_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         assignment_id: Uuid,
     ) -> BoxFuture<'a, Result<(), AppError>>;
 
@@ -86,17 +95,11 @@ pub trait IdentityRepository: Send + Sync {
         event: SecurityEvent,
     ) -> BoxFuture<'a, Result<UserId, AppError>>;
 
-    fn record_security_event<'a>(
-        &'a self,
-        event: SecurityEvent,
-    ) -> BoxFuture<'a, Result<(), AppError>>;
+    fn record_security_event<'a>(&'a self, event: SecurityEvent) -> BoxFuture<'a, Result<(), AppError>>;
 
     fn list_security_events<'a>(&'a self) -> BoxFuture<'a, Result<Vec<SecurityEvent>, AppError>>;
 
-    fn list_role_permissions<'a>(
-        &'a self,
-        role_id: RoleId,
-    ) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>>;
+    fn list_role_permissions<'a>(&'a self, role_id: RoleId) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>>;
 }
 
 pub trait SessionRepository: Send + Sync {
@@ -128,26 +131,14 @@ pub trait SessionRepository: Send + Sync {
 }
 
 pub trait OrganizationRepository: Send + Sync {
-    fn create_organization<'a>(
-        &'a self,
-        org: Organization,
-    ) -> BoxFuture<'a, Result<Organization, AppError>>;
+    fn create_organization<'a>(&'a self, org: Organization) -> BoxFuture<'a, Result<Organization, AppError>>;
     fn create_site<'a>(&'a self, site: Site) -> BoxFuture<'a, Result<Site, AppError>>;
-    fn create_department<'a>(
-        &'a self,
-        dept: Department,
-    ) -> BoxFuture<'a, Result<Department, AppError>>;
+    fn create_department<'a>(&'a self, dept: Department) -> BoxFuture<'a, Result<Department, AppError>>;
     fn create_location<'a>(&'a self, loc: Location) -> BoxFuture<'a, Result<Location, AppError>>;
 
     fn find_site<'a>(&'a self, id: SiteId) -> BoxFuture<'a, Result<Option<Site>, AppError>>;
-    fn find_department<'a>(
-        &'a self,
-        id: DepartmentId,
-    ) -> BoxFuture<'a, Result<Option<Department>, AppError>>;
-    fn find_location<'a>(
-        &'a self,
-        id: LocationId,
-    ) -> BoxFuture<'a, Result<Option<Location>, AppError>>;
+    fn find_department<'a>(&'a self, id: DepartmentId) -> BoxFuture<'a, Result<Option<Department>, AppError>>;
+    fn find_location<'a>(&'a self, id: LocationId) -> BoxFuture<'a, Result<Option<Location>, AppError>>;
 
     /// SQL-level filtered list of sites accessible under `grants`.
     fn list_sites_for_grants<'a>(

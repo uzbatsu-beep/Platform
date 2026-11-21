@@ -17,3 +17,8 @@
 - **Cookie:** `HttpOnly; SameSite=Lax; Path=/` + обязательный `Secure` в Server-режиме (или за доверенным TLS reverse proxy). Исключение HTTP без `Secure` разрешено **строго** для Standalone loopback (`127.0.0.1` / `::1`) и блокируется на любых внешних адресах.
 - **CSRF:** привязанный к сессии 256-битный CSRF-токен (`X-CSRF-Token`, сравнение через `ct_eq`) + обязательная проверка `Origin` по белому списку доверенных origins.
 - **Rate Limiting:** ограниченный по памяти in-memory `LoginRateLimiter` по `(source_ip, normalized_username)` без перманентной блокировки администратора. *Ограничение:* in-memory лимитер защищает один экземпляр; для многосерверного Server-развёртывания требуется общий store или лимитирование на reverse proxy.
+
+## PR-04.1 Hardening: Real HTTP Runtime, ClientIpResolver & Argon2id Offloading
+- `platform-server` монтирует `identity_router` и `/health/live` с `ConnectInfo<SocketAddr>`, security headers (`nosniff`, `DENY`, `no-referrer`, `no-store`) и graceful shutdown.
+- `login_handler` определяет IP клиента исключительно через `ClientIpResolver` (реальный `peer_ip` по умолчанию; `X-Forwarded-For` right-to-left только от явно настроенных `security.trusted_proxies`).
+- Все операции Argon2id (`hash_new_password_async`, `verify_password_async`, `verify_dummy_async`) выполняются в `tokio::task::spawn_blocking` под `tokio::sync::Semaphore`.

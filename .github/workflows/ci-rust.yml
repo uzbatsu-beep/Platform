@@ -32,7 +32,7 @@ jobs:
         run: cargo check -p platform-server --no-default-features --features server --locked
       - name: Check Standalone feature profile (SQLite 3.54.1 bundled, locked)
         run: cargo check -p platform-server --no-default-features --features standalone --locked
-      - name: Run workspace unit & SQLite 3.54.1 integration tests
+      - name: Run workspace unit, SQLite 3.54.1, HTTP E2E & CLI E2E tests
         run: cargo test --workspace --locked
 
   postgres-18-integration:
@@ -60,8 +60,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.100.0"
-      - name: Run PostgreSQL 18 integration tests (locked)
+      - name: Run PostgreSQL 18 integration & Scoped RBAC IDOR tests (locked)
         run: cargo test -p platform-db-pg --locked -- --nocapture
+      - name: Verify Server binary compiles with PostgreSQL feature (locked)
+        run: cargo test -p platform-server --no-default-features --features server --locked --no-run
 
   postgres-19-integration:
     runs-on: ubuntu-latest
@@ -88,8 +90,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.100.0"
-      - name: Run PostgreSQL 19 integration tests (locked)
+      - name: Run PostgreSQL 19 integration & Scoped RBAC IDOR tests (locked)
         run: cargo test -p platform-db-pg --locked -- --nocapture
+      - name: Verify Server binary compiles with PostgreSQL feature (locked)
+        run: cargo test -p platform-server --no-default-features --features server --locked --no-run
 
   arch-and-security-guards:
     runs-on: ubuntu-latest

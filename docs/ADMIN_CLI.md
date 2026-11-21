@@ -15,3 +15,8 @@
 - Требует локального OS-доступа к серверу/БД.
 - В одной транзакции обновляет Argon2id-хэш, **принудительно отзывает все активные сессии пользователя** и записывает `security.admin_password_recovered` в `core_security_events`.
 - *Примечание по аудиту:* `core_security_events` — минимальный долговечный фундамент событий безопасности PR-04; полноценный append-only Audit Log и retention реализуются в PR-05.
+
+## PR-04.1 Hardening: Реальная интеграция CLI (`neon` и `neon-cli`)
+- Команды `neon admin init`, `neon admin reset-password`, `neon-cli admin init`, `neon-cli admin reset-password` и `migrate` подключены напрямую к реальным адаптерам SQLite 3.54.1 и PostgreSQL 18/19 (заглушки с exit code 2 удалены).
+- Пароли принимаются через `rpassword` (без эха в терминале) или `--password-stdin`, никогда не передаются в аргументах и не выводятся в stdout/stderr.
+- `source_instance_id` автоматически генерируется (UUIDv7) и сохраняется в `core_instance_meta` при первом запуске.

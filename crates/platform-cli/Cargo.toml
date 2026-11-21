@@ -15,3 +15,10 @@ workspace = true
 [dependencies]
 clap.workspace = true
 platform-cli-core.workspace = true
+platform-core.workspace = true
+platform-db-pg.workspace = true
+platform-db-sqlite.workspace = true
+platform-sdk.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -17,18 +17,9 @@ pub const CORE_PERMISSIONS: &[(&str, &str)] = &[
     ("core:user:manage", "permissions.core.user.manage"),
     ("core:role:read", "permissions.core.role.read"),
     ("core:role:manage", "permissions.core.role.manage"),
-    (
-        "core:organization:read",
-        "permissions.core.organization.read",
-    ),
-    (
-        "core:organization:manage",
-        "permissions.core.organization.manage",
-    ),
-    (
-        "core:department:manage",
-        "permissions.core.department.manage",
-    ),
+    ("core:organization:read", "permissions.core.organization.read"),
+    ("core:organization:manage", "permissions.core.organization.manage"),
+    ("core:department:manage", "permissions.core.department.manage"),
     ("core:location:manage", "permissions.core.location.manage"),
 ];
 
@@ -182,7 +173,9 @@ impl fmt::Debug for Session {
 impl Session {
     #[must_use]
     pub fn is_active_at(&self, now: UtcMillis) -> bool {
-        self.revoked_at.is_none() && now < self.idle_expires_at && now < self.absolute_expires_at
+        self.revoked_at.is_none()
+            && now < self.idle_expires_at
+            && now < self.absolute_expires_at
     }
 }
 

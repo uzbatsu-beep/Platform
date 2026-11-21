@@ -31,7 +31,7 @@ pub struct LoginOutcome {
 pub struct AuthenticationService {
     provider: Arc<dyn AuthProvider>,
     identity_repo: Arc<dyn IdentityRepository>,
-    session_repo: Arc<dyn SessionRepository>,
+    _session_repo: Arc<dyn SessionRepository>,
     rate_limiter: Arc<LoginRateLimiter>,
     session_policy: SessionPolicy,
 }
@@ -48,7 +48,7 @@ impl AuthenticationService {
         Self {
             provider,
             identity_repo,
-            session_repo,
+            _session_repo: session_repo,
             rate_limiter,
             session_policy,
         }
@@ -185,6 +185,45 @@ impl AuthenticationService {
     }
 }
 
+/// Strict multi-scope authorization rule for user deactivation (eliminates client-supplied scope IDOR):
+/// - If the target user has active role assignments, the caller MUST hold `core:user:manage`
+///   covering EVERY active scope of the target user (including `Scope::Global` if present).
+/// - If the target user has no active role assignments yet, only a caller holding `core:user:manage`
+///   at `Scope::Global` may deactivate them.
+pub fn authorize_user_deactivation(
+    caller_ctx: &AuthContext,
+    target_scopes: &[Scope],
+) -> Result<(), AppError> {
+    let manage_users = PermissionKey::parse("core:user:manage")
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if target_scopes.is_empty() {
+        caller_ctx.require_permission(&manage_users, &Scope::Global)?;
+        return Ok(());
+    }
+    for scope in target_scopes {
+        caller_ctx.require_permission(&manage_users, scope)?;
+    }
+    Ok(())
+}
+
+/// Strict authorization rule for revoking an existing role assignment (eliminates client-supplied scope IDOR):
+/// - Caller MUST hold `core:role:manage` covering the assignment's ACTUAL DB `scope`.
+/// - Caller MUST ALSO hold EVERY permission granted by that role covering the actual `scope`
+///   (prevents revoking a more-privileged role assignment even within the same site/department).
+pub fn authorize_assignment_revocation(
+    caller_ctx: &AuthContext,
+    actual_scope: &Scope,
+    role_permissions: &[PermissionKey],
+) -> Result<(), AppError> {
+    let manage_roles = PermissionKey::parse("core:role:manage")
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    caller_ctx.require_permission(&manage_roles, actual_scope)?;
+    for perm in role_permissions {
+        caller_ctx.require_permission(perm, actual_scope)?;
+    }
+    Ok(())
+}
+
 /// Application service enforcing Scoped RBAC, delegation bounds, and last-admin protection.
 pub struct AuthorizationService {
     identity_repo: Arc<dyn IdentityRepository>,
@@ -226,11 +265,9 @@ impl AuthorizationService {
 
         let trimmed_user = username.trim();
         if !(3..=64).contains(&trimmed_user.len()) {
-            return Err(AppError::validation(
-                "Username must be between 3 and 64 characters",
-            ));
+            return Err(AppError::validation("Username must be between 3 and 64 characters"));
         }
-        let phc = self.hasher.hash_new_password(password)?;
+        let phc = self.hasher.hash_new_password_async(password.clone()).await?;
         let now = UtcMillis::now();
         let user = User {
             id: UserId::generate(),
@@ -255,9 +292,7 @@ impl AuthorizationService {
         let caller_id = match ctx.actor {
             ActorKind::User { user_id, .. } => user_id,
             ActorKind::System { .. } => {
-                return Err(AppError::forbidden(
-                    "System actor requires explicit user scope",
-                ));
+                return Err(AppError::forbidden("System actor requires explicit user scope"));
             }
         };
         let read_perm = PermissionKey::parse("core:user:read")
@@ -269,37 +304,27 @@ impl AuthorizationService {
             .cloned()
             .collect();
         if read_grants.is_empty() {
-            return Err(AppError::forbidden(
-                "Missing required permission 'core:user:read'",
-            ));
+            return Err(AppError::forbidden("Missing required permission 'core:user:read'"));
         }
         self.identity_repo
             .list_users_for_grants(caller_id, &read_grants)
             .await
     }
 
+    /// Deactivates `target_user_id` after verifying `ctx` covers ALL actual DB scopes of the target
+    /// user inside the same transaction (zero reliance on client-supplied `target_scope`), preserving
+    /// last-global-admin protection and revoking all active sessions atomically.
     pub async fn deactivate_user(
         &self,
         ctx: &AuthContext,
         target_user_id: UserId,
-        target_scope: &Scope,
         expected_version: RowVersion,
         is_if_match: bool,
     ) -> Result<User, AppError> {
-        let perm = PermissionKey::parse("core:user:manage")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        ctx.require_permission(&perm, target_scope)?;
-
         let now = UtcMillis::now();
-        let updated = self
-            .identity_repo
-            .deactivate_user_checked(target_user_id, expected_version, is_if_match, now)
-            .await?;
-        let _ = self
-            .session_repo
-            .revoke_all_user_sessions(target_user_id, now)
-            .await?;
-        Ok(updated)
+        self.identity_repo
+            .deactivate_user_authorized(ctx, target_user_id, expected_version, is_if_match, now)
+            .await
     }
 
     pub async fn create_role(
@@ -352,14 +377,24 @@ impl AuthorizationService {
         ctx.require_permission(&manage_roles, &target_scope)?;
 
         if !self.org_repo.scope_exists(&target_scope).await? {
-            return Err(AppError::validation(
-                "Target scope does not exist or department does not belong to site",
-            ));
+            return Err(AppError::validation("Target scope does not exist or department does not belong to site"));
         }
 
-        let role_perms = self.identity_repo.list_role_permissions(role_id).await?;
+        let Some(target_user) = self.identity_repo.find_user_by_id(target_user_id).await? else {
+            return Err(AppError::not_found("Target user not found"));
+        };
+        if !target_user.is_active || target_user.archived_at.is_some() {
+            return Err(AppError::domain_conflict("Cannot assign role to inactive or archived user"));
+        }
+        let Some(role) = self.identity_repo.find_role_by_id(role_id).await? else {
+            return Err(AppError::not_found("Role not found"));
+        };
+        if role.archived_at.is_some() {
+            return Err(AppError::domain_conflict("Cannot assign an archived role"));
+        }
+        let role_perms = role.permissions;
         if role_perms.is_empty() {
-            return Err(AppError::not_found("Role not found or has no permissions"));
+            return Err(AppError::not_found("Role has no permissions"));
         }
         for perm in &role_perms {
             ctx.require_permission(perm, &target_scope)?;
@@ -380,17 +415,16 @@ impl AuthorizationService {
         self.identity_repo.assign_role(assignment).await
     }
 
+    /// Revokes `assignment_id` after loading its actual DB scope & role permissions inside the
+    /// transaction and verifying `ctx` holds `core:role:manage` plus every permission of that role
+    /// covering the actual scope (zero reliance on client-supplied `target_scope`).
     pub async fn revoke_assignment(
         &self,
         ctx: &AuthContext,
         assignment_id: Uuid,
-        target_scope: &Scope,
     ) -> Result<(), AppError> {
-        let manage_roles = PermissionKey::parse("core:role:manage")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        ctx.require_permission(&manage_roles, target_scope)?;
         self.identity_repo
-            .revoke_assignment_checked(assignment_id)
+            .revoke_assignment_authorized(ctx, assignment_id)
             .await
     }
 }
@@ -474,15 +508,16 @@ impl OrganizationService {
             .map_err(|e| AppError::internal(e.to_string()))?;
         ctx.require_permission(&perm, &Scope::Site { site_id })?;
 
-        if let Some(parent_id) = parent_department_id
-            && !self
+        if let Some(parent_id) = parent_department_id {
+            if !self
                 .org_repo
                 .department_belongs_to_site(parent_id, site_id)
                 .await?
-        {
-            return Err(AppError::validation(
-                "Parent department does not belong to target site",
-            ));
+            {
+                return Err(AppError::validation(
+                    "Parent department does not belong to target site",
+                ));
+            }
         }
         let now = UtcMillis::now();
         self.org_repo
@@ -562,9 +597,7 @@ impl OrganizationService {
             .cloned()
             .collect();
         if grants.is_empty() {
-            return Err(AppError::forbidden(
-                "Missing required permission 'core:organization:read'",
-            ));
+            return Err(AppError::forbidden("Missing required permission 'core:organization:read'"));
         }
         self.org_repo.list_sites_for_grants(&grants).await
     }
@@ -583,13 +616,9 @@ impl OrganizationService {
             .cloned()
             .collect();
         if grants.is_empty() {
-            return Err(AppError::forbidden(
-                "Missing required permission 'core:organization:read'",
-            ));
+            return Err(AppError::forbidden("Missing required permission 'core:organization:read'"));
         }
-        self.org_repo
-            .list_departments_for_site(site_id, &grants)
-            .await
+        self.org_repo.list_departments_for_site(site_id, &grants).await
     }
 
     pub async fn update_department(
@@ -616,9 +645,7 @@ impl OrganizationService {
 
         if let Some(parent_id) = new_parent {
             if parent_id == department_id {
-                return Err(AppError::domain_conflict(
-                    "Department cannot be its own parent",
-                ));
+                return Err(AppError::domain_conflict("Department cannot be its own parent"));
             }
             if !self
                 .org_repo
@@ -671,12 +698,7 @@ impl OrganizationService {
             },
         )?;
         self.org_repo
-            .archive_department(
-                department_id,
-                expected_version,
-                is_if_match,
-                UtcMillis::now(),
-            )
+            .archive_department(department_id, expected_version, is_if_match, UtcMillis::now())
             .await
     }
 }
@@ -712,12 +734,10 @@ impl AdminBootstrapService {
     ) -> Result<UserId, AppError> {
         let trimmed = username.trim();
         if !(3..=64).contains(&trimmed.len()) {
-            return Err(AppError::validation(
-                "Admin username must be 3..=64 characters",
-            ));
+            return Err(AppError::validation("Admin username must be 3..=64 characters"));
         }
         self.identity_repo.seed_core_permissions().await?;
-        let phc = self.hasher.hash_new_password(password)?;
+        let phc = self.hasher.hash_new_password_async(password.clone()).await?;
         let now = UtcMillis::now();
         let user_id = UserId::generate();
         let role_id = RoleId::generate();
@@ -746,8 +766,7 @@ impl AdminBootstrapService {
         let admin_role = Role {
             id: role_id,
             name: "platform_administrator".to_string(),
-            description: "System global administrator role created during CLI bootstrap"
-                .to_string(),
+            description: "System global administrator role created during CLI bootstrap".to_string(),
             is_system: true,
             permissions: perms,
             source_instance_id: self.instance_id,
@@ -787,7 +806,7 @@ impl AdminBootstrapService {
         new_password: &SecretString,
     ) -> Result<UserId, AppError> {
         let norm = normalize_username(username);
-        let phc = self.hasher.hash_new_password(new_password)?;
+        let phc = self.hasher.hash_new_password_async(new_password.clone()).await?;
         let now = UtcMillis::now();
         let event = SecurityEvent {
             id: Uuid::now_v7(),

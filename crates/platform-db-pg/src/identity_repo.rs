@@ -4,15 +4,16 @@ use std::collections::HashSet;
 
 use platform_core::identity::{
     CORE_PERMISSIONS, Department, IdentityRepository, Location, Organization,
+    authorize_assignment_revocation, authorize_user_deactivation,
     OrganizationRepository, Role, RoleAssignment, SecretString, SecurityEvent, Session,
     SessionRepository, Site, User,
 };
 use platform_sdk::{
-    AppError, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId, PermissionGrant,
+    AppError, AuthContext, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId, PermissionGrant,
     PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId, SourceInstanceId, UserId,
     UtcMillis,
 };
-use sqlx::{AssertSqlSafe, Row, postgres::PgRow};
+use sqlx::{Row, postgres::PgRow};
 use uuid::Uuid;
 
 use crate::PgDatabase;
@@ -35,63 +36,30 @@ impl PgIdentityStore {
     }
 
     fn map_user(row: &PgRow) -> Result<User, AppError> {
-        let id: Uuid = row
-            .try_get("id")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let emp_opt: Option<Uuid> = row
-            .try_get("employee_id")
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        let id: Uuid = row.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
+        let emp_opt: Option<Uuid> = row.try_get("employee_id").map_err(|e| AppError::internal(e.to_string()))?;
         let employee_id = match emp_opt {
-            Some(u) => {
-                Some(EmployeeId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?)
-            }
+            Some(u) => Some(EmployeeId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?),
             None => None,
         };
-        let src: Uuid = row
-            .try_get("source_instance_id")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let sv: i32 = row
-            .try_get("schema_version")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let rv: i64 = row
-            .try_get("row_version")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let created_ms: i64 = row
-            .try_get("created_ms")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let updated_ms: i64 = row
-            .try_get("updated_ms")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let archived_ms: Option<i64> = row
-            .try_get("archived_ms")
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        let src: Uuid = row.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
+        let sv: i32 = row.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
+        let rv: i64 = row.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
+        let created_ms: i64 = row.try_get("created_ms").map_err(|e| AppError::internal(e.to_string()))?;
+        let updated_ms: i64 = row.try_get("updated_ms").map_err(|e| AppError::internal(e.to_string()))?;
+        let archived_ms: Option<i64> = row.try_get("archived_ms").map_err(|e| AppError::internal(e.to_string()))?;
 
         Ok(User {
             id: UserId::try_from_uuid(id).map_err(|e| AppError::internal(e.to_string()))?,
-            username: row
-                .try_get("username")
-                .map_err(|e| AppError::internal(e.to_string()))?,
-            normalized_username: row
-                .try_get("normalized_username")
-                .map_err(|e| AppError::internal(e.to_string()))?,
-            password_hash: SecretString::new(
-                row.try_get::<String, _>("password_hash")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-            ),
-            display_name: row
-                .try_get("display_name")
-                .map_err(|e| AppError::internal(e.to_string()))?,
-            is_active: row
-                .try_get("is_active")
-                .map_err(|e| AppError::internal(e.to_string()))?,
+            username: row.try_get("username").map_err(|e| AppError::internal(e.to_string()))?,
+            normalized_username: row.try_get("normalized_username").map_err(|e| AppError::internal(e.to_string()))?,
+            password_hash: SecretString::new(row.try_get::<String, _>("password_hash").map_err(|e| AppError::internal(e.to_string()))?),
+            display_name: row.try_get("display_name").map_err(|e| AppError::internal(e.to_string()))?,
+            is_active: row.try_get("is_active").map_err(|e| AppError::internal(e.to_string()))?,
             employee_id,
-            preferences_json: row
-                .try_get("preferences_json")
-                .map_err(|e| AppError::internal(e.to_string()))?,
-            source_instance_id: SourceInstanceId::try_from_uuid(src)
-                .map_err(|e| AppError::internal(e.to_string()))?,
-            schema_version: SchemaVersion::new(sv.max(1) as u32)
-                .map_err(|e| AppError::internal(e.to_string()))?,
+            preferences_json: row.try_get("preferences_json").map_err(|e| AppError::internal(e.to_string()))?,
+            source_instance_id: SourceInstanceId::try_from_uuid(src).map_err(|e| AppError::internal(e.to_string()))?,
+            schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
             row_version: RowVersion::new(rv.max(1) as u64),
             created_at: UtcMillis::from_unix_millis(created_ms.max(0) as u64),
             updated_at: UtcMillis::from_unix_millis(updated_ms.max(0) as u64),
@@ -99,14 +67,77 @@ impl PgIdentityStore {
         })
     }
 
+    /// Loads or initializes the persistent `SourceInstanceId` stored in `core.core_instance_meta`.
+    pub async fn ensure_source_instance_id(&self) -> Result<SourceInstanceId, AppError> {
+        let existing = sqlx::query("SELECT source_instance_id FROM core.core_instance_meta WHERE id = 1")
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        if let Some(row) = existing {
+            let id: Uuid = row
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            return SourceInstanceId::try_from_uuid(id)
+                .map_err(|e| AppError::internal(e.to_string()));
+        }
+        let fresh = SourceInstanceId::generate();
+        sqlx::query(
+            r#"
+            INSERT INTO core.core_instance_meta (id, source_instance_id, schema_version)
+            VALUES (1, $1, 1)
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(fresh.as_uuid())
+        .execute(self.db.pool())
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+        let row = sqlx::query("SELECT source_instance_id FROM core.core_instance_meta WHERE id = 1")
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let id: Uuid = row
+            .try_get("source_instance_id")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        SourceInstanceId::try_from_uuid(id).map_err(|e| AppError::internal(e.to_string()))
+    }
+
+    fn parse_scope_from_row(row: &PgRow) -> Result<Scope, AppError> {
+        let kind: String = row.try_get("scope_kind").map_err(|e| AppError::internal(e.to_string()))?;
+        match kind.as_str() {
+            "global" => Ok(Scope::Global),
+            "site" => Ok(Scope::Site {
+                site_id: SiteId::try_from_uuid(
+                    row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            }),
+            "department" => Ok(Scope::Department {
+                site_id: SiteId::try_from_uuid(
+                    row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+                department_id: DepartmentId::try_from_uuid(
+                    row.try_get("scope_department_id").map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            }),
+            "own" => Ok(Scope::Own {
+                user_id: UserId::try_from_uuid(
+                    row.try_get("scope_owner_user_id").map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            }),
+            other => Err(AppError::internal(format!("unknown scope_kind: {other}"))),
+        }
+    }
+
     fn scope_columns(scope: &Scope) -> (&'static str, Option<Uuid>, Option<Uuid>, Option<Uuid>) {
         match scope {
             Scope::Global => ("global", None, None, None),
             Scope::Site { site_id } => ("site", Some(site_id.as_uuid()), None, None),
-            Scope::Department {
-                site_id,
-                department_id,
-            } => (
+            Scope::Department { site_id, department_id } => (
                 "department",
                 Some(site_id.as_uuid()),
                 Some(department_id.as_uuid()),
@@ -142,15 +173,10 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn find_user_by_username<'a>(
-        &'a self,
-        normalized_username: &'a str,
-    ) -> BoxFuture<'a, Result<Option<User>, AppError>> {
+    fn find_user_by_username<'a>(&'a self, normalized_username: &'a str) -> BoxFuture<'a, Result<Option<User>, AppError>> {
         Box::pin(async move {
-            let sql = format!(
-                "SELECT {USER_SELECT_COLS} FROM core.core_users WHERE normalized_username = $1"
-            );
-            let row = sqlx::query(AssertSqlSafe(sql))
+            let sql = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE normalized_username = $1");
+            let row = sqlx::query(&sql)
                 .bind(normalized_username)
                 .fetch_optional(self.db.pool())
                 .await
@@ -162,7 +188,7 @@ impl IdentityRepository for PgIdentityStore {
     fn find_user_by_id<'a>(&'a self, id: UserId) -> BoxFuture<'a, Result<Option<User>, AppError>> {
         Box::pin(async move {
             let sql = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
-            let row = sqlx::query(AssertSqlSafe(sql))
+            let row = sqlx::query(&sql)
                 .bind(id.as_uuid())
                 .fetch_optional(self.db.pool())
                 .await
@@ -178,9 +204,8 @@ impl IdentityRepository for PgIdentityStore {
     ) -> BoxFuture<'a, Result<Vec<User>, AppError>> {
         Box::pin(async move {
             if grants.iter().any(|g| matches!(g.scope, Scope::Global)) {
-                let sql =
-                    format!("SELECT {USER_SELECT_COLS} FROM core.core_users ORDER BY username ASC");
-                let rows = sqlx::query(AssertSqlSafe(sql))
+                let sql = format!("SELECT {USER_SELECT_COLS} FROM core.core_users ORDER BY username ASC");
+                let rows = sqlx::query(&sql)
                     .fetch_all(self.db.pool())
                     .await
                     .map_err(|e| AppError::internal(e.to_string()))?;
@@ -193,9 +218,7 @@ impl IdentityRepository for PgIdentityStore {
             for g in grants {
                 match g.scope {
                     Scope::Site { site_id } => site_ids.push(site_id.as_uuid()),
-                    Scope::Department { department_id, .. } => {
-                        dept_ids.push(department_id.as_uuid())
-                    }
+                    Scope::Department { department_id, .. } => dept_ids.push(department_id.as_uuid()),
                     Scope::Own { user_id } if user_id == caller_user_id => include_self = true,
                     _ => {}
                 }
@@ -212,7 +235,7 @@ impl IdentityRepository for PgIdentityStore {
                 ORDER BY u.username ASC
                 "#
             );
-            let rows = sqlx::query(AssertSqlSafe(sql))
+            let rows = sqlx::query(&sql)
                 .bind(include_self)
                 .bind(caller_user_id.as_uuid())
                 .bind(&site_ids)
@@ -266,12 +289,7 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn update_password_hash<'a>(
-        &'a self,
-        user_id: UserId,
-        new_phc: SecretString,
-        now: UtcMillis,
-    ) -> BoxFuture<'a, Result<(), AppError>> {
+    fn update_password_hash<'a>(&'a self, user_id: UserId, new_phc: SecretString, now: UtcMillis) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             sqlx::query(
                 "UPDATE core.core_users SET password_hash = $1, updated_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($2::bigint * INTERVAL '1 millisecond'), row_version = row_version + 1 WHERE id = $3",
@@ -286,33 +304,67 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn deactivate_user_checked<'a>(
+    fn deactivate_user_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         target_user_id: UserId,
         expected_row_version: RowVersion,
         is_if_match: bool,
         now: UtcMillis,
     ) -> BoxFuture<'a, Result<User, AppError>> {
         Box::pin(async move {
-            let mut tx = self
-                .db
-                .pool()
-                .begin()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self.db.pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind(BOOTSTRAP_LOCK_KEY)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
+            let sel = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
+            let existing = sqlx::query(&sel)
+                .bind(target_user_id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let Some(row) = existing else {
+                let _ = tx.rollback().await;
+                return Err(AppError::not_found("User not found"));
+            };
+            let current = Self::map_user(&row)?;
+
+            // Load ALL active assignment scopes of target_user_id inside the transaction.
+            let scope_rows = sqlx::query(
+                r#"
+                SELECT a.scope_kind, a.scope_site_id, a.scope_department_id, a.scope_owner_user_id
+                FROM core.core_role_assignments a
+                JOIN core.core_roles r ON r.id = a.role_id
+                WHERE a.user_id = $1 AND r.archived_at IS NULL
+                "#,
+            )
+            .bind(target_user_id.as_uuid())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let mut target_scopes = Vec::with_capacity(scope_rows.len());
+            for sr in &scope_rows {
+                target_scopes.push(Self::parse_scope_from_row(sr)?);
+            }
+
+            if let Err(err) = authorize_user_deactivation(caller_ctx, &target_scopes) {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+
             let target_is_admin: i64 = sqlx::query(
                 r#"
                 SELECT COUNT(DISTINCT a.user_id)
                 FROM core.core_role_assignments a
                 JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
+                JOIN core.core_roles r ON r.id = a.role_id
                 JOIN core.core_users u ON u.id = a.user_id
-                WHERE a.user_id = $1 AND u.is_active = TRUE AND a.scope_kind = 'global'
+                WHERE a.user_id = $1 AND u.is_active = TRUE AND u.archived_at IS NULL
+                  AND r.archived_at IS NULL AND a.scope_kind = 'global'
                   AND rp.permission_key = 'core:role:manage'
                 "#,
             )
@@ -329,8 +381,10 @@ impl IdentityRepository for PgIdentityStore {
                     SELECT COUNT(DISTINCT a.user_id)
                     FROM core.core_role_assignments a
                     JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
+                    JOIN core.core_roles r ON r.id = a.role_id
                     JOIN core.core_users u ON u.id = a.user_id
-                    WHERE a.user_id <> $1 AND u.is_active = TRUE AND a.scope_kind = 'global'
+                    WHERE a.user_id <> $1 AND u.is_active = TRUE AND u.archived_at IS NULL
+                      AND r.archived_at IS NULL AND a.scope_kind = 'global'
                       AND rp.permission_key = 'core:role:manage'
                     "#,
                 )
@@ -349,17 +403,6 @@ impl IdentityRepository for PgIdentityStore {
                 }
             }
 
-            let sel = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
-            let existing = sqlx::query(AssertSqlSafe(sel.clone()))
-                .bind(target_user_id.as_uuid())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let Some(row) = existing else {
-                let _ = tx.rollback().await;
-                return Err(AppError::not_found("User not found"));
-            };
-            let current = Self::map_user(&row)?;
             if current.row_version != expected_row_version {
                 let _ = tx.rollback().await;
                 return Err(if is_if_match {
@@ -369,36 +412,40 @@ impl IdentityRepository for PgIdentityStore {
                 });
             }
 
+            let now_ms = Self::ms_i64(now)?;
             sqlx::query(
                 "UPDATE core.core_users SET is_active = FALSE, updated_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond'), row_version = row_version + 1 WHERE id = $2 AND row_version = $3",
             )
-            .bind(Self::ms_i64(now)?)
+            .bind(now_ms)
             .bind(target_user_id.as_uuid())
             .bind(expected_row_version.get() as i64)
             .execute(&mut *tx)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            let updated_row = sqlx::query(AssertSqlSafe(sel))
+            // Atomic session revocation inside the same transaction.
+            sqlx::query(
+                "UPDATE core.core_sessions SET revoked_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond') WHERE user_id = $2 AND revoked_at IS NULL",
+            )
+            .bind(now_ms)
+            .bind(target_user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let updated_row = sqlx::query(&sel)
                 .bind(target_user_id.as_uuid())
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            tx.commit()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
             Self::map_user(&updated_row)
         })
     }
 
     fn create_role<'a>(&'a self, role: Role) -> BoxFuture<'a, Result<Role, AppError>> {
         Box::pin(async move {
-            let mut tx = self
-                .db
-                .pool()
-                .begin()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self.db.pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
             sqlx::query(
                 r#"
                 INSERT INTO core.core_roles (
@@ -431,9 +478,7 @@ impl IdentityRepository for PgIdentityStore {
                     .await
                     .map_err(|e| AppError::internal(e.to_string()))?;
             }
-            tx.commit()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
             Ok(role)
         })
     }
@@ -444,7 +489,8 @@ impl IdentityRepository for PgIdentityStore {
                 r#"
                 SELECT id, name, description, is_system, source_instance_id, schema_version, row_version,
                        ((EXTRACT(EPOCH FROM created_at) * 1000)::numeric)::bigint AS created_ms,
-                       ((EXTRACT(EPOCH FROM updated_at) * 1000)::numeric)::bigint AS updated_ms
+                       ((EXTRACT(EPOCH FROM updated_at) * 1000)::numeric)::bigint AS updated_ms,
+                       CASE WHEN archived_at IS NULL THEN NULL ELSE ((EXTRACT(EPOCH FROM archived_at) * 1000)::numeric)::bigint END AS archived_ms
                 FROM core.core_roles WHERE id = $1
                 "#,
             )
@@ -456,49 +502,29 @@ impl IdentityRepository for PgIdentityStore {
                 return Ok(None);
             };
             let perms = self.list_role_permissions(id).await?;
-            let src: Uuid = r
-                .try_get("source_instance_id")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i32 = r
-                .try_get("schema_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r
-                .try_get("row_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let cm: i64 = r
-                .try_get("created_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let um: i64 = r
-                .try_get("updated_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let src: Uuid = r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i32 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let cm: i64 = r.try_get("created_ms").map_err(|e| AppError::internal(e.to_string()))?;
+            let um: i64 = r.try_get("updated_ms").map_err(|e| AppError::internal(e.to_string()))?;
+            let am: Option<i64> = r.try_get("archived_ms").map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Role {
                 id,
-                name: r
-                    .try_get("name")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                description: r
-                    .try_get("description")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                is_system: r
-                    .try_get("is_system")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
+                description: r.try_get("description").map_err(|e| AppError::internal(e.to_string()))?,
+                is_system: r.try_get("is_system").map_err(|e| AppError::internal(e.to_string()))?,
                 permissions: perms,
-                source_instance_id: SourceInstanceId::try_from_uuid(src)
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32)
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(src).map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: UtcMillis::from_unix_millis(cm.max(0) as u64),
                 updated_at: UtcMillis::from_unix_millis(um.max(0) as u64),
-                archived_at: None,
+                archived_at: am.map(|m| UtcMillis::from_unix_millis(m.max(0) as u64)),
             }))
         })
     }
 
-    fn assign_role<'a>(
-        &'a self,
-        assignment: RoleAssignment,
-    ) -> BoxFuture<'a, Result<RoleAssignment, AppError>> {
+    fn assign_role<'a>(&'a self, assignment: RoleAssignment) -> BoxFuture<'a, Result<RoleAssignment, AppError>> {
         Box::pin(async move {
             let (kind, sid, did, oid) = Self::scope_columns(&assignment.scope);
             let res = sqlx::query(
@@ -534,45 +560,90 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn revoke_assignment_checked<'a>(
+    fn revoke_assignment_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         assignment_id: Uuid,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            let mut tx = self
-                .db
-                .pool()
-                .begin()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self.db.pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind(BOOTSTRAP_LOCK_KEY)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
-            let remaining: i64 = sqlx::query(
+            let assignment_row = sqlx::query(
                 r#"
-                SELECT COUNT(DISTINCT a.user_id)
-                FROM core.core_role_assignments a
-                JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
-                JOIN core.core_users u ON u.id = a.user_id
-                WHERE a.id <> $1 AND u.is_active = TRUE AND a.scope_kind = 'global'
-                  AND rp.permission_key = 'core:role:manage'
+                SELECT role_id, scope_kind, scope_site_id, scope_department_id, scope_owner_user_id
+                FROM core.core_role_assignments
+                WHERE id = $1
                 "#,
             )
             .bind(assignment_id)
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| AppError::internal(e.to_string()))?
-            .try_get(0)
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            if remaining == 0 {
+            let Some(arow) = assignment_row else {
                 let _ = tx.rollback().await;
-                return Err(AppError::domain_conflict(
-                    "Cannot revoke the last global administrator assignment",
-                ));
+                return Err(AppError::not_found("Role assignment not found"));
+            };
+            let actual_scope = Self::parse_scope_from_row(&arow)?;
+            let role_id: Uuid = arow
+                .try_get("role_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let perm_rows = sqlx::query(
+                "SELECT permission_key FROM core.core_role_permissions WHERE role_id = $1",
+            )
+            .bind(role_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut role_perms = Vec::with_capacity(perm_rows.len());
+            for pr in perm_rows {
+                let key_s: String = pr
+                    .try_get("permission_key")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                role_perms.push(
+                    PermissionKey::parse(&key_s).map_err(|e| AppError::internal(e.to_string()))?,
+                );
+            }
+
+            if let Err(err) = authorize_assignment_revocation(caller_ctx, &actual_scope, &role_perms) {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+
+            let is_global_admin_grant = matches!(actual_scope, Scope::Global)
+                && role_perms.iter().any(|p| p.as_str() == "core:role:manage");
+            if is_global_admin_grant {
+                let remaining: i64 = sqlx::query(
+                    r#"
+                    SELECT COUNT(DISTINCT a.user_id)
+                    FROM core.core_role_assignments a
+                    JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
+                    JOIN core.core_roles r ON r.id = a.role_id
+                    JOIN core.core_users u ON u.id = a.user_id
+                    WHERE a.id <> $1 AND u.is_active = TRUE AND u.archived_at IS NULL
+                      AND r.archived_at IS NULL AND a.scope_kind = 'global'
+                      AND rp.permission_key = 'core:role:manage'
+                    "#,
+                )
+                .bind(assignment_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+                .try_get(0)
+                .map_err(|e| AppError::internal(e.to_string()))?;
+
+                if remaining == 0 {
+                    let _ = tx.rollback().await;
+                    return Err(AppError::domain_conflict(
+                        "Cannot revoke the last global administrator assignment",
+                    ));
+                }
             }
 
             sqlx::query("DELETE FROM core.core_role_assignments WHERE id = $1")
@@ -580,17 +651,12 @@ impl IdentityRepository for PgIdentityStore {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            tx.commit()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
             Ok(())
         })
     }
 
-    fn list_effective_grants<'a>(
-        &'a self,
-        user_id: UserId,
-    ) -> BoxFuture<'a, Result<Vec<PermissionGrant>, AppError>> {
+    fn list_effective_grants<'a>(&'a self, user_id: UserId) -> BoxFuture<'a, Result<Vec<PermissionGrant>, AppError>> {
         Box::pin(async move {
             let rows = sqlx::query(
                 r#"
@@ -608,47 +674,28 @@ impl IdentityRepository for PgIdentityStore {
 
             let mut grants = Vec::with_capacity(rows.len());
             for row in rows {
-                let perm_s: String = row
-                    .try_get("permission_key")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
-                let kind: String = row
-                    .try_get("scope_kind")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let perm_s: String = row.try_get("permission_key").map_err(|e| AppError::internal(e.to_string()))?;
+                let kind: String = row.try_get("scope_kind").map_err(|e| AppError::internal(e.to_string()))?;
                 let scope = match kind.as_str() {
                     "global" => Scope::Global,
                     "site" => Scope::Site {
-                        site_id: SiteId::try_from_uuid(
-                            row.try_get("scope_site_id")
-                                .map_err(|e| AppError::internal(e.to_string()))?,
-                        )
-                        .map_err(|e| AppError::internal(e.to_string()))?,
+                        site_id: SiteId::try_from_uuid(row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
                     },
                     "department" => Scope::Department {
-                        site_id: SiteId::try_from_uuid(
-                            row.try_get("scope_site_id")
-                                .map_err(|e| AppError::internal(e.to_string()))?,
-                        )
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                        department_id: DepartmentId::try_from_uuid(
-                            row.try_get("scope_department_id")
-                                .map_err(|e| AppError::internal(e.to_string()))?,
-                        )
-                        .map_err(|e| AppError::internal(e.to_string()))?,
+                        site_id: SiteId::try_from_uuid(row.try_get("scope_site_id").map_err(|e| AppError::internal(e.to_string()))?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
+                        department_id: DepartmentId::try_from_uuid(row.try_get("scope_department_id").map_err(|e| AppError::internal(e.to_string()))?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
                     },
                     "own" => Scope::Own {
-                        user_id: UserId::try_from_uuid(
-                            row.try_get("scope_owner_user_id")
-                                .map_err(|e| AppError::internal(e.to_string()))?,
-                        )
-                        .map_err(|e| AppError::internal(e.to_string()))?,
+                        user_id: UserId::try_from_uuid(row.try_get("scope_owner_user_id").map_err(|e| AppError::internal(e.to_string()))?)
+                            .map_err(|e| AppError::internal(e.to_string()))?,
                     },
-                    other => {
-                        return Err(AppError::internal(format!("unknown scope_kind: {other}")));
-                    }
+                    other => return Err(AppError::internal(format!("unknown scope_kind: {other}"))),
                 };
                 grants.push(PermissionGrant {
-                    permission: PermissionKey::parse(&perm_s)
-                        .map_err(|e| AppError::internal(e.to_string()))?,
+                    permission: PermissionKey::parse(&perm_s).map_err(|e| AppError::internal(e.to_string()))?,
                     scope,
                 });
             }
@@ -664,12 +711,7 @@ impl IdentityRepository for PgIdentityStore {
         event: SecurityEvent,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            let mut tx = self
-                .db
-                .pool()
-                .begin()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self.db.pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind(BOOTSTRAP_LOCK_KEY)
                 .execute(&mut *tx)
@@ -788,9 +830,7 @@ impl IdentityRepository for PgIdentityStore {
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            tx.commit()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
             Ok(())
         })
     }
@@ -803,12 +843,7 @@ impl IdentityRepository for PgIdentityStore {
         event: SecurityEvent,
     ) -> BoxFuture<'a, Result<UserId, AppError>> {
         Box::pin(async move {
-            let mut tx = self
-                .db
-                .pool()
-                .begin()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut tx = self.db.pool().begin().await.map_err(|e| AppError::internal(e.to_string()))?;
             let row = sqlx::query("SELECT id FROM core.core_users WHERE normalized_username = $1")
                 .bind(normalized_username)
                 .fetch_optional(&mut *tx)
@@ -818,11 +853,8 @@ impl IdentityRepository for PgIdentityStore {
                 let _ = tx.rollback().await;
                 return Err(AppError::not_found("Target user not found"));
             };
-            let uid: Uuid = r
-                .try_get("id")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let user_id =
-                UserId::try_from_uuid(uid).map_err(|e| AppError::internal(e.to_string()))?;
+            let uid: Uuid = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
+            let user_id = UserId::try_from_uuid(uid).map_err(|e| AppError::internal(e.to_string()))?;
             let now_ms = Self::ms_i64(now)?;
 
             sqlx::query(
@@ -856,17 +888,12 @@ impl IdentityRepository for PgIdentityStore {
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            tx.commit()
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
             Ok(user_id)
         })
     }
 
-    fn record_security_event<'a>(
-        &'a self,
-        event: SecurityEvent,
-    ) -> BoxFuture<'a, Result<(), AppError>> {
+    fn record_security_event<'a>(&'a self, event: SecurityEvent) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             sqlx::query(
                 "INSERT INTO core.core_security_events (id, event_type, actor_user_id, target_user_id, detail_json, occurred_at) VALUES ($1, $2, $3, $4, $5, TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($6::bigint * INTERVAL '1 millisecond'))",
@@ -894,39 +921,21 @@ impl IdentityRepository for PgIdentityStore {
             .map_err(|e| AppError::internal(e.to_string()))?;
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
-                let actor_u: Option<Uuid> = r
-                    .try_get("actor_user_id")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
-                let target_u: Option<Uuid> = r
-                    .try_get("target_user_id")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
-                let occ_ms: i64 = r
-                    .try_get("occ_ms")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let actor_u: Option<Uuid> = r.try_get("actor_user_id").map_err(|e| AppError::internal(e.to_string()))?;
+                let target_u: Option<Uuid> = r.try_get("target_user_id").map_err(|e| AppError::internal(e.to_string()))?;
+                let occ_ms: i64 = r.try_get("occ_ms").map_err(|e| AppError::internal(e.to_string()))?;
                 out.push(SecurityEvent {
-                    id: r
-                        .try_get("id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                    event_type: r
-                        .try_get("event_type")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
+                    id: r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?,
+                    event_type: r.try_get("event_type").map_err(|e| AppError::internal(e.to_string()))?,
                     actor_user_id: match actor_u {
-                        Some(u) => Some(
-                            UserId::try_from_uuid(u)
-                                .map_err(|e| AppError::internal(e.to_string()))?,
-                        ),
+                        Some(u) => Some(UserId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?),
                         None => None,
                     },
                     target_user_id: match target_u {
-                        Some(u) => Some(
-                            UserId::try_from_uuid(u)
-                                .map_err(|e| AppError::internal(e.to_string()))?,
-                        ),
+                        Some(u) => Some(UserId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?),
                         None => None,
                     },
-                    detail_json: r
-                        .try_get("detail_json")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
+                    detail_json: r.try_get("detail_json").map_err(|e| AppError::internal(e.to_string()))?,
                     occurred_at: UtcMillis::from_unix_millis(occ_ms.max(0) as u64),
                 });
             }
@@ -934,25 +943,17 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn list_role_permissions<'a>(
-        &'a self,
-        role_id: RoleId,
-    ) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>> {
+    fn list_role_permissions<'a>(&'a self, role_id: RoleId) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>> {
         Box::pin(async move {
-            let rows = sqlx::query(
-                "SELECT permission_key FROM core.core_role_permissions WHERE role_id = $1",
-            )
-            .bind(role_id.as_uuid())
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
+            let rows = sqlx::query("SELECT permission_key FROM core.core_role_permissions WHERE role_id = $1")
+                .bind(role_id.as_uuid())
+                .fetch_all(self.db.pool())
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
             let mut perms = Vec::with_capacity(rows.len());
             for r in rows {
-                let k: String = r
-                    .try_get("permission_key")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
-                perms
-                    .push(PermissionKey::parse(&k).map_err(|e| AppError::internal(e.to_string()))?);
+                let k: String = r.try_get("permission_key").map_err(|e| AppError::internal(e.to_string()))?;
+                perms.push(PermissionKey::parse(&k).map_err(|e| AppError::internal(e.to_string()))?);
             }
             Ok(perms)
         })
@@ -995,10 +996,7 @@ impl SessionRepository for PgIdentityStore {
         })
     }
 
-    fn find_by_token_hash<'a>(
-        &'a self,
-        token_hash_sha256: &'a str,
-    ) -> BoxFuture<'a, Result<Option<Session>, AppError>> {
+    fn find_by_token_hash<'a>(&'a self, token_hash_sha256: &'a str) -> BoxFuture<'a, Result<Option<Session>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query(
                 r#"
@@ -1019,57 +1017,29 @@ impl SessionRepository for PgIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let uid: Uuid = r
-                .try_get("user_id")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let cm: i64 = r
-                .try_get("created_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let lm: i64 = r
-                .try_get("last_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let im: i64 = r
-                .try_get("idle_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let am: i64 = r
-                .try_get("abs_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let rm: Option<i64> = r
-                .try_get("rev_ms")
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let uid: Uuid = r.try_get("user_id").map_err(|e| AppError::internal(e.to_string()))?;
+            let cm: i64 = r.try_get("created_ms").map_err(|e| AppError::internal(e.to_string()))?;
+            let lm: i64 = r.try_get("last_ms").map_err(|e| AppError::internal(e.to_string()))?;
+            let im: i64 = r.try_get("idle_ms").map_err(|e| AppError::internal(e.to_string()))?;
+            let am: i64 = r.try_get("abs_ms").map_err(|e| AppError::internal(e.to_string()))?;
+            let rm: Option<i64> = r.try_get("rev_ms").map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Session {
-                id: r
-                    .try_get("id")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                user_id: UserId::try_from_uuid(uid)
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                token_hash_sha256: r
-                    .try_get("token_hash_sha256")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                csrf_token_hash_sha256: r
-                    .try_get("csrf_token_hash_sha256")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                id: r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?,
+                user_id: UserId::try_from_uuid(uid).map_err(|e| AppError::internal(e.to_string()))?,
+                token_hash_sha256: r.try_get("token_hash_sha256").map_err(|e| AppError::internal(e.to_string()))?,
+                csrf_token_hash_sha256: r.try_get("csrf_token_hash_sha256").map_err(|e| AppError::internal(e.to_string()))?,
                 created_at: UtcMillis::from_unix_millis(cm.max(0) as u64),
                 last_seen_at: UtcMillis::from_unix_millis(lm.max(0) as u64),
                 idle_expires_at: UtcMillis::from_unix_millis(im.max(0) as u64),
                 absolute_expires_at: UtcMillis::from_unix_millis(am.max(0) as u64),
                 revoked_at: rm.map(|m| UtcMillis::from_unix_millis(m.max(0) as u64)),
-                source_ip: r
-                    .try_get("source_ip")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                user_agent: r
-                    .try_get("user_agent")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                source_ip: r.try_get("source_ip").map_err(|e| AppError::internal(e.to_string()))?,
+                user_agent: r.try_get("user_agent").map_err(|e| AppError::internal(e.to_string()))?,
             }))
         })
     }
 
-    fn touch_session<'a>(
-        &'a self,
-        session_id: Uuid,
-        last_seen_at: UtcMillis,
-        new_idle_expires_at: UtcMillis,
-    ) -> BoxFuture<'a, Result<(), AppError>> {
+    fn touch_session<'a>(&'a self, session_id: Uuid, last_seen_at: UtcMillis, new_idle_expires_at: UtcMillis) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             sqlx::query(
                 r#"
@@ -1089,11 +1059,7 @@ impl SessionRepository for PgIdentityStore {
         })
     }
 
-    fn revoke_session<'a>(
-        &'a self,
-        session_id: Uuid,
-        revoked_at: UtcMillis,
-    ) -> BoxFuture<'a, Result<(), AppError>> {
+    fn revoke_session<'a>(&'a self, session_id: Uuid, revoked_at: UtcMillis) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             sqlx::query(
                 "UPDATE core.core_sessions SET revoked_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond') WHERE id = $2 AND revoked_at IS NULL",
@@ -1107,11 +1073,7 @@ impl SessionRepository for PgIdentityStore {
         })
     }
 
-    fn revoke_all_user_sessions<'a>(
-        &'a self,
-        user_id: UserId,
-        revoked_at: UtcMillis,
-    ) -> BoxFuture<'a, Result<u64, AppError>> {
+    fn revoke_all_user_sessions<'a>(&'a self, user_id: UserId, revoked_at: UtcMillis) -> BoxFuture<'a, Result<u64, AppError>> {
         Box::pin(async move {
             let res = sqlx::query(
                 "UPDATE core.core_sessions SET revoked_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond') WHERE user_id = $2 AND revoked_at IS NULL",
@@ -1127,10 +1089,7 @@ impl SessionRepository for PgIdentityStore {
 }
 
 impl OrganizationRepository for PgIdentityStore {
-    fn create_organization<'a>(
-        &'a self,
-        org: Organization,
-    ) -> BoxFuture<'a, Result<Organization, AppError>> {
+    fn create_organization<'a>(&'a self, org: Organization) -> BoxFuture<'a, Result<Organization, AppError>> {
         Box::pin(async move {
             sqlx::query(
                 r#"
@@ -1181,10 +1140,7 @@ impl OrganizationRepository for PgIdentityStore {
         })
     }
 
-    fn create_department<'a>(
-        &'a self,
-        dept: Department,
-    ) -> BoxFuture<'a, Result<Department, AppError>> {
+    fn create_department<'a>(&'a self, dept: Department) -> BoxFuture<'a, Result<Department, AppError>> {
         Box::pin(async move {
             sqlx::query(
                 r#"
@@ -1256,38 +1212,19 @@ impl OrganizationRepository for PgIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let sv: i32 = r
-                .try_get("schema_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r
-                .try_get("row_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let cm: i64 = r
-                .try_get("cm")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let um: i64 = r
-                .try_get("um")
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i32 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let cm: i64 = r.try_get("cm").map_err(|e| AppError::internal(e.to_string()))?;
+            let um: i64 = r.try_get("um").map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Site {
                 id,
-                organization_id: OrganizationId::try_from_uuid(
-                    r.try_get("organization_id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                )
-                .map_err(|e| AppError::internal(e.to_string()))?,
-                name: r
-                    .try_get("name")
+                organization_id: OrganizationId::try_from_uuid(r.try_get("organization_id").map_err(|e| AppError::internal(e.to_string()))?)
                     .map_err(|e| AppError::internal(e.to_string()))?,
-                code: r
-                    .try_get("code")
+                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
+                code: r.try_get("code").map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?)
                     .map_err(|e| AppError::internal(e.to_string()))?,
-                source_instance_id: SourceInstanceId::try_from_uuid(
-                    r.try_get("source_instance_id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                )
-                .map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32)
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: UtcMillis::from_unix_millis(cm.max(0) as u64),
                 updated_at: UtcMillis::from_unix_millis(um.max(0) as u64),
@@ -1296,10 +1233,7 @@ impl OrganizationRepository for PgIdentityStore {
         })
     }
 
-    fn find_department<'a>(
-        &'a self,
-        id: DepartmentId,
-    ) -> BoxFuture<'a, Result<Option<Department>, AppError>> {
+    fn find_department<'a>(&'a self, id: DepartmentId) -> BoxFuture<'a, Result<Option<Department>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query(
                 r#"
@@ -1317,51 +1251,25 @@ impl OrganizationRepository for PgIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let parent: Option<Uuid> = r
-                .try_get("parent_department_id")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i32 = r
-                .try_get("schema_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r
-                .try_get("row_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let cm: i64 = r
-                .try_get("cm")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let um: i64 = r
-                .try_get("um")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let am: Option<i64> = r
-                .try_get("am")
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let parent: Option<Uuid> = r.try_get("parent_department_id").map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i32 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let cm: i64 = r.try_get("cm").map_err(|e| AppError::internal(e.to_string()))?;
+            let um: i64 = r.try_get("um").map_err(|e| AppError::internal(e.to_string()))?;
+            let am: Option<i64> = r.try_get("am").map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Department {
                 id,
-                site_id: SiteId::try_from_uuid(
-                    r.try_get("site_id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                )
-                .map_err(|e| AppError::internal(e.to_string()))?,
+                site_id: SiteId::try_from_uuid(r.try_get("site_id").map_err(|e| AppError::internal(e.to_string()))?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 parent_department_id: match parent {
-                    Some(u) => Some(
-                        DepartmentId::try_from_uuid(u)
-                            .map_err(|e| AppError::internal(e.to_string()))?,
-                    ),
+                    Some(u) => Some(DepartmentId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?),
                     None => None,
                 },
-                name: r
-                    .try_get("name")
+                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
+                code: r.try_get("code").map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?)
                     .map_err(|e| AppError::internal(e.to_string()))?,
-                code: r
-                    .try_get("code")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                source_instance_id: SourceInstanceId::try_from_uuid(
-                    r.try_get("source_instance_id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                )
-                .map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32)
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: UtcMillis::from_unix_millis(cm.max(0) as u64),
                 updated_at: UtcMillis::from_unix_millis(um.max(0) as u64),
@@ -1370,10 +1278,7 @@ impl OrganizationRepository for PgIdentityStore {
         })
     }
 
-    fn find_location<'a>(
-        &'a self,
-        id: LocationId,
-    ) -> BoxFuture<'a, Result<Option<Location>, AppError>> {
+    fn find_location<'a>(&'a self, id: LocationId) -> BoxFuture<'a, Result<Option<Location>, AppError>> {
         Box::pin(async move {
             let row = sqlx::query(
                 r#"
@@ -1390,58 +1295,29 @@ impl OrganizationRepository for PgIdentityStore {
             let Some(r) = row else {
                 return Ok(None);
             };
-            let dept: Option<Uuid> = r
-                .try_get("department_id")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let parent: Option<Uuid> = r
-                .try_get("parent_location_id")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let sv: i32 = r
-                .try_get("schema_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let rv: i64 = r
-                .try_get("row_version")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let cm: i64 = r
-                .try_get("cm")
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let um: i64 = r
-                .try_get("um")
-                .map_err(|e| AppError::internal(e.to_string()))?;
+            let dept: Option<Uuid> = r.try_get("department_id").map_err(|e| AppError::internal(e.to_string()))?;
+            let parent: Option<Uuid> = r.try_get("parent_location_id").map_err(|e| AppError::internal(e.to_string()))?;
+            let sv: i32 = r.try_get("schema_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let rv: i64 = r.try_get("row_version").map_err(|e| AppError::internal(e.to_string()))?;
+            let cm: i64 = r.try_get("cm").map_err(|e| AppError::internal(e.to_string()))?;
+            let um: i64 = r.try_get("um").map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Location {
                 id,
-                site_id: SiteId::try_from_uuid(
-                    r.try_get("site_id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                )
-                .map_err(|e| AppError::internal(e.to_string()))?,
+                site_id: SiteId::try_from_uuid(r.try_get("site_id").map_err(|e| AppError::internal(e.to_string()))?)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
                 department_id: match dept {
-                    Some(u) => Some(
-                        DepartmentId::try_from_uuid(u)
-                            .map_err(|e| AppError::internal(e.to_string()))?,
-                    ),
+                    Some(u) => Some(DepartmentId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?),
                     None => None,
                 },
                 parent_location_id: match parent {
-                    Some(u) => Some(
-                        LocationId::try_from_uuid(u)
-                            .map_err(|e| AppError::internal(e.to_string()))?,
-                    ),
+                    Some(u) => Some(LocationId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?),
                     None => None,
                 },
-                name: r
-                    .try_get("name")
+                name: r.try_get("name").map_err(|e| AppError::internal(e.to_string()))?,
+                code: r.try_get("code").map_err(|e| AppError::internal(e.to_string()))?,
+                source_instance_id: SourceInstanceId::try_from_uuid(r.try_get("source_instance_id").map_err(|e| AppError::internal(e.to_string()))?)
                     .map_err(|e| AppError::internal(e.to_string()))?,
-                code: r
-                    .try_get("code")
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-                source_instance_id: SourceInstanceId::try_from_uuid(
-                    r.try_get("source_instance_id")
-                        .map_err(|e| AppError::internal(e.to_string()))?,
-                )
-                .map_err(|e| AppError::internal(e.to_string()))?,
-                schema_version: SchemaVersion::new(sv.max(1) as u32)
-                    .map_err(|e| AppError::internal(e.to_string()))?,
+                schema_version: SchemaVersion::new(sv.max(1) as u32).map_err(|e| AppError::internal(e.to_string()))?,
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: UtcMillis::from_unix_millis(cm.max(0) as u64),
                 updated_at: UtcMillis::from_unix_millis(um.max(0) as u64),
@@ -1450,26 +1326,19 @@ impl OrganizationRepository for PgIdentityStore {
         })
     }
 
-    fn list_sites_for_grants<'a>(
-        &'a self,
-        grants: &'a [PermissionGrant],
-    ) -> BoxFuture<'a, Result<Vec<Site>, AppError>> {
+    fn list_sites_for_grants<'a>(&'a self, grants: &'a [PermissionGrant]) -> BoxFuture<'a, Result<Vec<Site>, AppError>> {
         Box::pin(async move {
             let has_global = grants.iter().any(|g| matches!(g.scope, Scope::Global));
             let rows = if has_global {
-                sqlx::query(
-                    "SELECT id FROM core.core_sites WHERE archived_at IS NULL ORDER BY code ASC",
-                )
-                .fetch_all(self.db.pool())
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?
+                sqlx::query("SELECT id FROM core.core_sites WHERE archived_at IS NULL ORDER BY code ASC")
+                    .fetch_all(self.db.pool())
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?
             } else {
                 let ids: Vec<Uuid> = grants
                     .iter()
                     .filter_map(|g| match g.scope {
-                        Scope::Site { site_id } | Scope::Department { site_id, .. } => {
-                            Some(site_id.as_uuid())
-                        }
+                        Scope::Site { site_id } | Scope::Department { site_id, .. } => Some(site_id.as_uuid()),
                         _ => None,
                     })
                     .collect::<HashSet<_>>()
@@ -1483,11 +1352,8 @@ impl OrganizationRepository for PgIdentityStore {
             };
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
-                let u: Uuid = r
-                    .try_get("id")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
-                let sid =
-                    SiteId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?;
+                let u: Uuid = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
+                let sid = SiteId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?;
                 if let Some(s) = self.find_site(sid).await? {
                     out.push(s);
                 }
@@ -1496,15 +1362,9 @@ impl OrganizationRepository for PgIdentityStore {
         })
     }
 
-    fn list_departments_for_site<'a>(
-        &'a self,
-        site_id: SiteId,
-        grants: &'a [PermissionGrant],
-    ) -> BoxFuture<'a, Result<Vec<Department>, AppError>> {
+    fn list_departments_for_site<'a>(&'a self, site_id: SiteId, grants: &'a [PermissionGrant]) -> BoxFuture<'a, Result<Vec<Department>, AppError>> {
         Box::pin(async move {
-            let covers_site = grants
-                .iter()
-                .any(|g| g.scope.covers(&Scope::Site { site_id }));
+            let covers_site = grants.iter().any(|g| g.scope.covers(&Scope::Site { site_id }));
             let rows = if covers_site {
                 sqlx::query("SELECT id FROM core.core_departments WHERE site_id = $1 AND archived_at IS NULL ORDER BY code ASC")
                     .bind(site_id.as_uuid())
@@ -1515,10 +1375,7 @@ impl OrganizationRepository for PgIdentityStore {
                 let dept_ids: Vec<Uuid> = grants
                     .iter()
                     .filter_map(|g| match g.scope {
-                        Scope::Department {
-                            site_id: gs,
-                            department_id,
-                        } if gs == site_id => Some(department_id.as_uuid()),
+                        Scope::Department { site_id: gs, department_id } if gs == site_id => Some(department_id.as_uuid()),
                         _ => None,
                     })
                     .collect();
@@ -1531,11 +1388,8 @@ impl OrganizationRepository for PgIdentityStore {
             };
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
-                let u: Uuid = r
-                    .try_get("id")
-                    .map_err(|e| AppError::internal(e.to_string()))?;
-                let did = DepartmentId::try_from_uuid(u)
-                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let u: Uuid = r.try_get("id").map_err(|e| AppError::internal(e.to_string()))?;
+                let did = DepartmentId::try_from_uuid(u).map_err(|e| AppError::internal(e.to_string()))?;
                 if let Some(d) = self.find_department(did).await? {
                     out.push(d);
                 }
@@ -1557,9 +1411,7 @@ impl OrganizationRepository for PgIdentityStore {
             if let Some(mut cursor) = new_parent {
                 for _ in 0..64 {
                     if cursor == id {
-                        return Err(AppError::domain_conflict(
-                            "Circular department hierarchy detected",
-                        ));
+                        return Err(AppError::domain_conflict("Circular department hierarchy detected"));
                     }
                     match self.find_department(cursor).await? {
                         Some(d) => match d.parent_department_id {
@@ -1622,15 +1474,13 @@ impl OrganizationRepository for PgIdentityStore {
                 .map_err(|e| AppError::internal(e.to_string()))?
                 .try_get(0)
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            let assignments: i64 = sqlx::query(
-                "SELECT COUNT(*) FROM core.core_role_assignments WHERE scope_department_id = $1",
-            )
-            .bind(id.as_uuid())
-            .fetch_one(self.db.pool())
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?
-            .try_get(0)
-            .map_err(|e| AppError::internal(e.to_string()))?;
+            let assignments: i64 = sqlx::query("SELECT COUNT(*) FROM core.core_role_assignments WHERE scope_department_id = $1")
+                .bind(id.as_uuid())
+                .fetch_one(self.db.pool())
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+                .try_get(0)
+                .map_err(|e| AppError::internal(e.to_string()))?;
 
             if child_depts > 0 || active_locs > 0 || assignments > 0 {
                 return Err(AppError::domain_conflict(
@@ -1666,11 +1516,7 @@ impl OrganizationRepository for PgIdentityStore {
         })
     }
 
-    fn department_belongs_to_site<'a>(
-        &'a self,
-        department_id: DepartmentId,
-        site_id: SiteId,
-    ) -> BoxFuture<'a, Result<bool, AppError>> {
+    fn department_belongs_to_site<'a>(&'a self, department_id: DepartmentId, site_id: SiteId) -> BoxFuture<'a, Result<bool, AppError>> {
         Box::pin(async move {
             let count: i64 = sqlx::query("SELECT COUNT(*) FROM core.core_departments WHERE id = $1 AND site_id = $2 AND archived_at IS NULL")
                 .bind(department_id.as_uuid())
@@ -1689,12 +1535,8 @@ impl OrganizationRepository for PgIdentityStore {
             match scope {
                 Scope::Global => Ok(true),
                 Scope::Site { site_id } => Ok(self.find_site(*site_id).await?.is_some()),
-                Scope::Department {
-                    site_id,
-                    department_id,
-                } => {
-                    self.department_belongs_to_site(*department_id, *site_id)
-                        .await
+                Scope::Department { site_id, department_id } => {
+                    self.department_belongs_to_site(*department_id, *site_id).await
                 }
                 Scope::Own { user_id } => Ok(self.find_user_by_id(*user_id).await?.is_some()),
             }

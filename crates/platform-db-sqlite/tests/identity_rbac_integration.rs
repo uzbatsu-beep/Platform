@@ -15,8 +15,14 @@ use platform_db_sqlite::{
 };
 use platform_sdk::{
     CorrelationId, ErrorCode, PermissionKey, RowVersion, RuntimeMode, Scope, SourceInstanceId,
-    UtcMillis,
 };
+
+async fn apply_core_migrations(db: &SqliteDatabase) -> Result<(), Box<dyn std::error::Error>> {
+    SqliteMigrationRunner::new(db.clone())
+        .run_namespace("core", &platform_db_sqlite::core_sqlite_migrations())
+        .await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()

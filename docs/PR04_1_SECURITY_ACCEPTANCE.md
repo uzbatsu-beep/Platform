@@ -23,3 +23,11 @@
   - PostgreSQL 18 / 19: `crates/platform-db-pg/tests/identity_rbac_integration.rs`
 - **Real HTTP E2E (Axum Router + SQLite):** `crates/platform-server/tests/http_e2e.rs`.
 - **Real CLI Binary E2E (`neon` binary):** `crates/platform-server/tests/cli_e2e.rs`.
+
+
+## 4. GitHub CI reconciliation (2026-11-21)
+
+- Draft PR #6 created from the full 36-file source archive, exact Git blob checksums matched.
+- Initial required checks found rustfmt differences and a stale workspace Cargo.lock (locked PostgreSQL jobs fail without regeneration).
+- A temporary branch-scoped workflow is used to execute `cargo update --workspace` and `cargo fmt --all` with pinned Rust 1.100.0; it must delete itself before the final code review.
+- Tests are **not accepted** until all seven required status checks pass on the same final HEAD; technical acceptance also requires review of real HTTP/CLI runtime and scoped RBAC negative tests.

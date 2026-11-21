@@ -34,6 +34,15 @@ jobs:
         run: cargo check -p platform-server --no-default-features --features standalone --locked
       - name: Run workspace unit, SQLite 3.54.1, HTTP E2E & CLI E2E tests
         run: cargo test --workspace --locked
+      - name: Repeat concurrent SQLite admin bootstrap and recovery regression (10 runs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..10}; do
+            echo "::group::SQLite bootstrap stress iteration $i/10"
+            cargo test -p platform-db-sqlite --test identity_rbac_integration sqlite_full_pr04_identity_rbac_and_negative_security_suite --locked -- --exact
+            echo "::endgroup::"
+          done
 
   postgres-18-integration:
     runs-on: ubuntu-latest

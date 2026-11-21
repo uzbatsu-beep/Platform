@@ -33,3 +33,5 @@
 - Tests are **not accepted** until all seven required status checks pass on the same final HEAD; technical acceptance also requires review of real HTTP/CLI runtime and scoped RBAC negative tests.
 
 - GitHub Actions one-time reconciliation **PASS** (run [44905562613](https://github.com/uzbatsu-beep/Platform/actions/runs/44905562613)); `Cargo.lock` regenerated, rustfmt completed, temporary workflow removed in commit `64742d6`. Full required CI is still pending technical acceptance.
+
+- Post-reconciliation Rust Clippy exposed three platform-core compilation defects (renamed session repository field, incorrect Option handling in PHC parameter parsing, unused import); corrected in `9e5c071`. Follow-up CI must pass before acceptance.

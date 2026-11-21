@@ -72,9 +72,10 @@ fn extract_session_cookie<'a>(headers: &'a HeaderMap, cookie_name: &str) -> Opti
     for part in raw.split(';') {
         let trimmed = part.trim();
         if let Some((k, v)) = trimmed.split_once('=') {
-            if k.trim() == cookie_name {
-                return Some(v.trim());
+            if k.trim() != cookie_name {
+                continue;
             }
+            return Some(v.trim());
         }
     }
     None

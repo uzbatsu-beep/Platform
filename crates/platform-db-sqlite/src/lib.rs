@@ -1,6 +1,3 @@
-pub mod identity_repo;
-pub use identity_repo::SqliteIdentityStore;
-
 //! SQLite 3.54.1 (bundled via libsqlite3-sys =0.39.1) database adapter for NEON Standalone mode.
 //!
 //! Features:
@@ -11,6 +8,9 @@ pub use identity_repo::SqliteIdentityStore;
 //! - Real `SqliteTxContext` implementing `platform_sdk::TxContext` with zero `unsafe`.
 //! - `SqliteMigrationRunner` (`core_module_migrations`, `BEGIN IMMEDIATE`, SHA-256 checksums, recovery).
 
+
+pub mod identity_repo;
+pub use identity_repo::SqliteIdentityStore;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

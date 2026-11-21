@@ -3,13 +3,13 @@
 
 use std::sync::Arc;
 
+use platform_core::MigrationSpec;
 use platform_core::identity::{
     AdminBootstrapService, Argon2Config, AuthenticationService, AuthorizationService, CookiePolicy,
     CsrfService, IdentityRepository, LocalAuthProvider, LoginRateLimiter, OrganizationService,
     PasswordHasherService, PasswordPolicy, RateLimitConfig, SecretString, SessionPolicy,
     UserPublicView,
 };
-use platform_core::MigrationSpec;
 use platform_db_sqlite::{
     SqliteConfig, SqliteDatabase, SqliteIdentityStore, SqliteMigrationRunner,
 };
@@ -19,7 +19,8 @@ use platform_sdk::{
 };
 
 #[tokio::test]
-async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite() -> Result<(), Box<dyn std::error::Error>> {
+async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite()
+-> Result<(), Box<dyn std::error::Error>> {
     let db_path = std::env::temp_dir().join(format!("neon-pr04-{}.db", uuid::Uuid::now_v7()));
     let db = SqliteDatabase::open(&SqliteConfig::new(&db_path)).await?;
 
@@ -90,12 +91,20 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite() -> Result<
             assert_eq!(e.code(), ErrorCode::ConflictDomainState);
             (id, "admin2")
         }
-        other => return Err(format!("expected exactly one bootstrap to succeed, got {other:?}").into()),
+        other => {
+            return Err(format!("expected exactly one bootstrap to succeed, got {other:?}").into());
+        }
     };
 
     // 2. Authentication: valid login, session fixation rotation, wrong password, unknown user, rate limit
     let login1 = auth_svc
-        .login(admin_name, &admin_pass, Some("127.0.0.1"), Some("test-agent"), None)
+        .login(
+            admin_name,
+            &admin_pass,
+            Some("127.0.0.1"),
+            Some("test-agent"),
+            None,
+        )
         .await?;
     assert_eq!(login1.user.id, admin_id);
     let pub_json = serde_json::to_string(&UserPublicView::from(&login1.user))?;
@@ -111,48 +120,124 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite() -> Result<
             Some(login1.tokens.session_token.expose_secret()),
         )
         .await?;
-    assert!(auth_svc.authenticate_session(login1.tokens.session_token.expose_secret(), CorrelationId::generate()).await.is_err());
+    assert!(
+        auth_svc
+            .authenticate_session(
+                login1.tokens.session_token.expose_secret(),
+                CorrelationId::generate()
+            )
+            .await
+            .is_err()
+    );
 
     let (sess, _u, admin_ctx) = auth_svc
-        .authenticate_session(login2.tokens.session_token.expose_secret(), CorrelationId::generate())
+        .authenticate_session(
+            login2.tokens.session_token.expose_secret(),
+            CorrelationId::generate(),
+        )
         .await?;
 
     // 3. CSRF validation (trusted origin + session-bound token)
     let csrf = CsrfService::new(vec!["http://127.0.0.1:8080".to_string()]);
-    assert!(csrf.verify(Some("http://127.0.0.1:8080"), Some(login2.tokens.csrf_token.expose_secret()), &sess.csrf_token_hash_sha256).is_ok());
-    assert!(csrf.verify(Some("https://evil.example"), Some(login2.tokens.csrf_token.expose_secret()), &sess.csrf_token_hash_sha256).is_err());
-    assert!(csrf.verify(Some("http://127.0.0.1:8080"), Some("wrong-token"), &sess.csrf_token_hash_sha256).is_err());
-    assert!(csrf.verify(None, Some(login2.tokens.csrf_token.expose_secret()), &sess.csrf_token_hash_sha256).is_err());
+    assert!(
+        csrf.verify(
+            Some("http://127.0.0.1:8080"),
+            Some(login2.tokens.csrf_token.expose_secret()),
+            &sess.csrf_token_hash_sha256
+        )
+        .is_ok()
+    );
+    assert!(
+        csrf.verify(
+            Some("https://evil.example"),
+            Some(login2.tokens.csrf_token.expose_secret()),
+            &sess.csrf_token_hash_sha256
+        )
+        .is_err()
+    );
+    assert!(
+        csrf.verify(
+            Some("http://127.0.0.1:8080"),
+            Some("wrong-token"),
+            &sess.csrf_token_hash_sha256
+        )
+        .is_err()
+    );
+    assert!(
+        csrf.verify(
+            None,
+            Some(login2.tokens.csrf_token.expose_secret()),
+            &sess.csrf_token_hash_sha256
+        )
+        .is_err()
+    );
 
     // Cookie policy: Server requires TLS; Standalone rejects non-loopback HTTP
     assert!(CookiePolicy::new(RuntimeMode::Server, "0.0.0.0", false).is_err());
     assert!(CookiePolicy::new(RuntimeMode::Standalone, "0.0.0.0", false).is_err());
     let server_cookie = CookiePolicy::new(RuntimeMode::Server, "0.0.0.0", true)?
         .format_set_cookie(&login2.tokens.session_token, 3600);
-    assert!(server_cookie.contains("HttpOnly") && server_cookie.contains("Secure") && server_cookie.contains("SameSite=Lax"));
+    assert!(
+        server_cookie.contains("HttpOnly")
+            && server_cookie.contains("Secure")
+            && server_cookie.contains("SameSite=Lax")
+    );
 
     // 4. Last global admin protection
     let last_admin_err = authz_svc
-        .deactivate_user(&admin_ctx, admin_id, &Scope::Global, RowVersion::INITIAL, true)
+        .deactivate_user(
+            &admin_ctx,
+            admin_id,
+            &Scope::Global,
+            RowVersion::INITIAL,
+            true,
+        )
         .await
         .err();
-    assert_eq!(last_admin_err.as_ref().map(|e| e.code()), Some(ErrorCode::ConflictDomainState));
+    assert_eq!(
+        last_admin_err.as_ref().map(|e| e.code()),
+        Some(ErrorCode::ConflictDomainState)
+    );
 
     // 5. Organization hierarchy + 412 vs 409 + Scoped RBAC isolation (Site A vs Site B, Dept A vs Dept B)
-    let org = org_svc.create_organization(&admin_ctx, "Завод №1", "PLANT-1").await?;
-    let site_a = org_svc.create_site(&admin_ctx, org.id, "Площадка А", "SITE-A").await?;
-    let site_b = org_svc.create_site(&admin_ctx, org.id, "Площадка Б", "SITE-B").await?;
-    let dept_a = org_svc.create_department(&admin_ctx, site_a.id, None, "Цех АСУ ТП", "DEPT-A").await?;
-    let dept_b = org_svc.create_department(&admin_ctx, site_b.id, None, "Цех Энергетики", "DEPT-B").await?;
+    let org = org_svc
+        .create_organization(&admin_ctx, "Завод №1", "PLANT-1")
+        .await?;
+    let site_a = org_svc
+        .create_site(&admin_ctx, org.id, "Площадка А", "SITE-A")
+        .await?;
+    let site_b = org_svc
+        .create_site(&admin_ctx, org.id, "Площадка Б", "SITE-B")
+        .await?;
+    let dept_a = org_svc
+        .create_department(&admin_ctx, site_a.id, None, "Цех АСУ ТП", "DEPT-A")
+        .await?;
+    let dept_b = org_svc
+        .create_department(&admin_ctx, site_b.id, None, "Цех Энергетики", "DEPT-B")
+        .await?;
 
     // Optimistic concurrency: If-Match -> 412, body expected_row_version -> 409
     let err_412 = org_svc
-        .update_department(&admin_ctx, dept_a.id, "Цех АСУ ТП 2", None, RowVersion::new(99), true)
+        .update_department(
+            &admin_ctx,
+            dept_a.id,
+            "Цех АСУ ТП 2",
+            None,
+            RowVersion::new(99),
+            true,
+        )
         .await
         .err();
     assert_eq!(err_412.as_ref().map(|e| e.status()), Some(412));
     let err_409 = org_svc
-        .update_department(&admin_ctx, dept_a.id, "Цех АСУ ТП 2", None, RowVersion::new(99), false)
+        .update_department(
+            &admin_ctx,
+            dept_a.id,
+            "Цех АСУ ТП 2",
+            None,
+            RowVersion::new(99),
+            false,
+        )
         .await
         .err();
     assert_eq!(err_409.as_ref().map(|e| e.status()), Some(409));
@@ -175,14 +260,22 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite() -> Result<
         )
         .await?;
     let assignment = authz_svc
-        .assign_role(&admin_ctx, eng_user.id, site_role.id, Scope::Site { site_id: site_a.id })
+        .assign_role(
+            &admin_ctx,
+            eng_user.id,
+            site_role.id,
+            Scope::Site { site_id: site_a.id },
+        )
         .await?;
 
     let eng_login = auth_svc
         .login("eng_a", &eng_pass, Some("127.0.0.1"), None, None)
         .await?;
     let (_s, _u, eng_ctx) = auth_svc
-        .authenticate_session(eng_login.tokens.session_token.expose_secret(), CorrelationId::generate())
+        .authenticate_session(
+            eng_login.tokens.session_token.expose_secret(),
+            CorrelationId::generate(),
+        )
         .await?;
 
     // SQL-level scope filtering: eng_a sees ONLY Site A, NOT Site B
@@ -193,7 +286,14 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite() -> Result<
     // IDOR / Horizontal escalation blocked: eng_a cannot modify dept_b (Site B) or self-assign Global
     assert_eq!(
         org_svc
-            .update_department(&eng_ctx, dept_b.id, "Hacked", None, dept_b.row_version, true)
+            .update_department(
+                &eng_ctx,
+                dept_b.id,
+                "Hacked",
+                None,
+                dept_b.row_version,
+                true
+            )
             .await
             .err()
             .map(|e| e.status()),
@@ -213,36 +313,79 @@ async fn sqlite_full_pr04_identity_rbac_and_negative_security_suite() -> Result<
         .revoke_assignment(&admin_ctx, assignment.id, &Scope::Global)
         .await?;
     let (_s2, _u2, eng_ctx_after) = auth_svc
-        .authenticate_session(eng_login.tokens.session_token.expose_secret(), CorrelationId::generate())
+        .authenticate_session(
+            eng_login.tokens.session_token.expose_secret(),
+            CorrelationId::generate(),
+        )
         .await?;
     assert!(org_svc.list_sites(&eng_ctx_after).await.is_err());
 
     // 6. Rate limiting & username enumeration parity
     let bad_pass = SecretString::new("WrongPassword2026!");
     for _ in 0..3 {
-        let e = auth_svc.login("eng_a", &bad_pass, Some("10.0.0.1"), None, None).await.err();
+        let e = auth_svc
+            .login("eng_a", &bad_pass, Some("10.0.0.1"), None, None)
+            .await
+            .err();
         assert_eq!(e.as_ref().map(|x| x.status()), Some(401));
     }
-    let throttled = auth_svc.login("eng_a", &eng_pass, Some("10.0.0.1"), None, None).await.err();
+    let throttled = auth_svc
+        .login("eng_a", &eng_pass, Some("10.0.0.1"), None, None)
+        .await
+        .err();
     assert_eq!(throttled.as_ref().map(|x| x.status()), Some(409));
 
-    let unknown_err = auth_svc.login("no_such_user", &bad_pass, Some("10.0.0.2"), None, None).await.err();
-    assert_eq!(unknown_err.as_ref().map(|x| x.public_detail()), Some("Invalid username or password"));
+    let unknown_err = auth_svc
+        .login("no_such_user", &bad_pass, Some("10.0.0.2"), None, None)
+        .await
+        .err();
+    assert_eq!(
+        unknown_err.as_ref().map(|x| x.public_detail()),
+        Some("Invalid username or password")
+    );
 
     // 7. Recovery CLI flow: resets password atomically, revokes all active sessions, records SecurityEvent
     let new_admin_pass = SecretString::new("RecoveredNeonAdmin2026!");
-    let recovered_id = bootstrap.reset_password(admin_name, &new_admin_pass).await?;
+    let recovered_id = bootstrap
+        .reset_password(admin_name, &new_admin_pass)
+        .await?;
     assert_eq!(recovered_id, admin_id);
     // Old session token is now invalid
-    assert!(auth_svc.authenticate_session(login2.tokens.session_token.expose_secret(), CorrelationId::generate()).await.is_err());
+    assert!(
+        auth_svc
+            .authenticate_session(
+                login2.tokens.session_token.expose_secret(),
+                CorrelationId::generate()
+            )
+            .await
+            .is_err()
+    );
     // Login with new password works; SecurityEvent recorded without plaintext
-    let relogin = auth_svc.login(admin_name, &new_admin_pass, Some("127.0.0.1"), None, None).await?;
+    let relogin = auth_svc
+        .login(admin_name, &new_admin_pass, Some("127.0.0.1"), None, None)
+        .await?;
     auth_svc.logout(relogin.session_id).await?;
-    assert!(auth_svc.authenticate_session(relogin.tokens.session_token.expose_secret(), CorrelationId::generate()).await.is_err());
+    assert!(
+        auth_svc
+            .authenticate_session(
+                relogin.tokens.session_token.expose_secret(),
+                CorrelationId::generate()
+            )
+            .await
+            .is_err()
+    );
 
     let events = store.list_security_events().await?;
-    assert!(events.iter().any(|e| e.event_type == "security.admin_bootstrap_initialized"));
-    assert!(events.iter().any(|e| e.event_type == "security.admin_password_recovered"));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == "security.admin_bootstrap_initialized")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == "security.admin_password_recovered")
+    );
     let events_json = serde_json::to_string(&events)?;
     assert!(!events_json.contains("RecoveredNeonAdmin2026!"));
 

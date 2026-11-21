@@ -56,9 +56,8 @@ impl AuthProvider for LocalAuthProvider {
                 return Err(AppError::unauthorized("Invalid username or password"));
             };
 
-            let (matched, needs_rehash) = self
-                .hasher
-                .verify_password(password, &user.password_hash)?;
+            let (matched, needs_rehash) =
+                self.hasher.verify_password(password, &user.password_hash)?;
 
             if !matched || !user.is_active || user.archived_at.is_some() {
                 return Err(AppError::unauthorized("Invalid username or password"));

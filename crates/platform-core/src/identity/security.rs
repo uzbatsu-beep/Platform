@@ -73,7 +73,7 @@ pub struct SessionPolicy {
 impl Default for SessionPolicy {
     fn default() -> Self {
         Self {
-            idle_timeout_ms: 30 * 60 * 1_000,         // 30 minutes
+            idle_timeout_ms: 30 * 60 * 1_000,          // 30 minutes
             absolute_timeout_ms: 12 * 60 * 60 * 1_000, // 12 hours
         }
     }
@@ -89,7 +89,11 @@ pub struct CookiePolicy {
 }
 
 impl CookiePolicy {
-    pub fn new(mode: RuntimeMode, bind_ip: impl Into<String>, tls_enabled: bool) -> Result<Self, AppError> {
+    pub fn new(
+        mode: RuntimeMode,
+        bind_ip: impl Into<String>,
+        tls_enabled: bool,
+    ) -> Result<Self, AppError> {
         let bind_ip = bind_ip.into();
         let is_loopback = bind_ip == "127.0.0.1" || bind_ip == "::1";
         let secure = match mode {
@@ -165,15 +169,17 @@ impl CsrfService {
     ) -> Result<(), AppError> {
         if let Some(origin) = origin_header {
             let normalized = origin.trim().trim_end_matches('/');
-            if !self
-                .trusted_origins
-                .iter()
-                .any(|allowed| allowed.trim_end_matches('/').eq_ignore_ascii_case(normalized))
-            {
+            if !self.trusted_origins.iter().any(|allowed| {
+                allowed
+                    .trim_end_matches('/')
+                    .eq_ignore_ascii_case(normalized)
+            }) {
                 return Err(AppError::forbidden("Untrusted request Origin header"));
             }
         } else {
-            return Err(AppError::forbidden("Missing Origin header for state-changing request"));
+            return Err(AppError::forbidden(
+                "Missing Origin header for state-changing request",
+            ));
         }
 
         let Some(token) = csrf_header.map(str::trim).filter(|s| !s.is_empty()) else {
@@ -181,7 +187,10 @@ impl CsrfService {
         };
 
         let provided_hash = sha256_hex(token.as_bytes());
-        if !ct_eq(provided_hash.as_bytes(), expected_csrf_hash_sha256.as_bytes()) {
+        if !ct_eq(
+            provided_hash.as_bytes(),
+            expected_csrf_hash_sha256.as_bytes(),
+        ) {
             return Err(AppError::forbidden("Invalid CSRF token"));
         }
         Ok(())
@@ -224,7 +233,12 @@ impl LoginRateLimiter {
     }
 
     /// Checks whether login attempt is allowed for `(source_ip, normalized_username)`.
-    pub fn check_allowed(&self, source: &str, normalized_username: &str, now: UtcMillis) -> Result<(), AppError> {
+    pub fn check_allowed(
+        &self,
+        source: &str,
+        normalized_username: &str,
+        now: UtcMillis,
+    ) -> Result<(), AppError> {
         let now_ms = now.as_unix_millis();
         let cutoff = now_ms.saturating_sub(self.config.window_ms);
         let mut guard = self
@@ -282,7 +296,10 @@ impl LoginRateLimiter {
                     }
                 }
             }
-            for key in [format!("src:{source}"), format!("acc:{normalized_username}")] {
+            for key in [
+                format!("src:{source}"),
+                format!("acc:{normalized_username}"),
+            ] {
                 let entry = guard.entry(key).or_default();
                 while entry.front().is_some_and(|&t| t < cutoff) {
                     entry.pop_front();

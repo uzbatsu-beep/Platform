@@ -226,7 +226,9 @@ impl AuthorizationService {
 
         let trimmed_user = username.trim();
         if !(3..=64).contains(&trimmed_user.len()) {
-            return Err(AppError::validation("Username must be between 3 and 64 characters"));
+            return Err(AppError::validation(
+                "Username must be between 3 and 64 characters",
+            ));
         }
         let phc = self.hasher.hash_new_password(password)?;
         let now = UtcMillis::now();
@@ -253,7 +255,9 @@ impl AuthorizationService {
         let caller_id = match ctx.actor {
             ActorKind::User { user_id, .. } => user_id,
             ActorKind::System { .. } => {
-                return Err(AppError::forbidden("System actor requires explicit user scope"));
+                return Err(AppError::forbidden(
+                    "System actor requires explicit user scope",
+                ));
             }
         };
         let read_perm = PermissionKey::parse("core:user:read")
@@ -265,7 +269,9 @@ impl AuthorizationService {
             .cloned()
             .collect();
         if read_grants.is_empty() {
-            return Err(AppError::forbidden("Missing required permission 'core:user:read'"));
+            return Err(AppError::forbidden(
+                "Missing required permission 'core:user:read'",
+            ));
         }
         self.identity_repo
             .list_users_for_grants(caller_id, &read_grants)
@@ -346,7 +352,9 @@ impl AuthorizationService {
         ctx.require_permission(&manage_roles, &target_scope)?;
 
         if !self.org_repo.scope_exists(&target_scope).await? {
-            return Err(AppError::validation("Target scope does not exist or department does not belong to site"));
+            return Err(AppError::validation(
+                "Target scope does not exist or department does not belong to site",
+            ));
         }
 
         let role_perms = self.identity_repo.list_role_permissions(role_id).await?;
@@ -555,7 +563,9 @@ impl OrganizationService {
             .cloned()
             .collect();
         if grants.is_empty() {
-            return Err(AppError::forbidden("Missing required permission 'core:organization:read'"));
+            return Err(AppError::forbidden(
+                "Missing required permission 'core:organization:read'",
+            ));
         }
         self.org_repo.list_sites_for_grants(&grants).await
     }
@@ -574,9 +584,13 @@ impl OrganizationService {
             .cloned()
             .collect();
         if grants.is_empty() {
-            return Err(AppError::forbidden("Missing required permission 'core:organization:read'"));
+            return Err(AppError::forbidden(
+                "Missing required permission 'core:organization:read'",
+            ));
         }
-        self.org_repo.list_departments_for_site(site_id, &grants).await
+        self.org_repo
+            .list_departments_for_site(site_id, &grants)
+            .await
     }
 
     pub async fn update_department(
@@ -603,7 +617,9 @@ impl OrganizationService {
 
         if let Some(parent_id) = new_parent {
             if parent_id == department_id {
-                return Err(AppError::domain_conflict("Department cannot be its own parent"));
+                return Err(AppError::domain_conflict(
+                    "Department cannot be its own parent",
+                ));
             }
             if !self
                 .org_repo
@@ -656,7 +672,12 @@ impl OrganizationService {
             },
         )?;
         self.org_repo
-            .archive_department(department_id, expected_version, is_if_match, UtcMillis::now())
+            .archive_department(
+                department_id,
+                expected_version,
+                is_if_match,
+                UtcMillis::now(),
+            )
             .await
     }
 }
@@ -692,7 +713,9 @@ impl AdminBootstrapService {
     ) -> Result<UserId, AppError> {
         let trimmed = username.trim();
         if !(3..=64).contains(&trimmed.len()) {
-            return Err(AppError::validation("Admin username must be 3..=64 characters"));
+            return Err(AppError::validation(
+                "Admin username must be 3..=64 characters",
+            ));
         }
         self.identity_repo.seed_core_permissions().await?;
         let phc = self.hasher.hash_new_password(password)?;
@@ -724,7 +747,8 @@ impl AdminBootstrapService {
         let admin_role = Role {
             id: role_id,
             name: "platform_administrator".to_string(),
-            description: "System global administrator role created during CLI bootstrap".to_string(),
+            description: "System global administrator role created during CLI bootstrap"
+                .to_string(),
             is_system: true,
             permissions: perms,
             source_instance_id: self.instance_id,

@@ -86,11 +86,17 @@ pub trait IdentityRepository: Send + Sync {
         event: SecurityEvent,
     ) -> BoxFuture<'a, Result<UserId, AppError>>;
 
-    fn record_security_event<'a>(&'a self, event: SecurityEvent) -> BoxFuture<'a, Result<(), AppError>>;
+    fn record_security_event<'a>(
+        &'a self,
+        event: SecurityEvent,
+    ) -> BoxFuture<'a, Result<(), AppError>>;
 
     fn list_security_events<'a>(&'a self) -> BoxFuture<'a, Result<Vec<SecurityEvent>, AppError>>;
 
-    fn list_role_permissions<'a>(&'a self, role_id: RoleId) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>>;
+    fn list_role_permissions<'a>(
+        &'a self,
+        role_id: RoleId,
+    ) -> BoxFuture<'a, Result<Vec<PermissionKey>, AppError>>;
 }
 
 pub trait SessionRepository: Send + Sync {
@@ -122,14 +128,26 @@ pub trait SessionRepository: Send + Sync {
 }
 
 pub trait OrganizationRepository: Send + Sync {
-    fn create_organization<'a>(&'a self, org: Organization) -> BoxFuture<'a, Result<Organization, AppError>>;
+    fn create_organization<'a>(
+        &'a self,
+        org: Organization,
+    ) -> BoxFuture<'a, Result<Organization, AppError>>;
     fn create_site<'a>(&'a self, site: Site) -> BoxFuture<'a, Result<Site, AppError>>;
-    fn create_department<'a>(&'a self, dept: Department) -> BoxFuture<'a, Result<Department, AppError>>;
+    fn create_department<'a>(
+        &'a self,
+        dept: Department,
+    ) -> BoxFuture<'a, Result<Department, AppError>>;
     fn create_location<'a>(&'a self, loc: Location) -> BoxFuture<'a, Result<Location, AppError>>;
 
     fn find_site<'a>(&'a self, id: SiteId) -> BoxFuture<'a, Result<Option<Site>, AppError>>;
-    fn find_department<'a>(&'a self, id: DepartmentId) -> BoxFuture<'a, Result<Option<Department>, AppError>>;
-    fn find_location<'a>(&'a self, id: LocationId) -> BoxFuture<'a, Result<Option<Location>, AppError>>;
+    fn find_department<'a>(
+        &'a self,
+        id: DepartmentId,
+    ) -> BoxFuture<'a, Result<Option<Department>, AppError>>;
+    fn find_location<'a>(
+        &'a self,
+        id: LocationId,
+    ) -> BoxFuture<'a, Result<Option<Location>, AppError>>;
 
     /// SQL-level filtered list of sites accessible under `grants`.
     fn list_sites_for_grants<'a>(

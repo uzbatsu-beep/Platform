@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
+use platform_core::MigrationSpec;
 use platform_core::identity::{
     AdminBootstrapService, Argon2Config, AuthenticationService, AuthorizationService,
     IdentityRepository, LocalAuthProvider, LoginRateLimiter, OrganizationService,
     PasswordHasherService, PasswordPolicy, RateLimitConfig, SecretString, SessionPolicy,
 };
-use platform_core::MigrationSpec;
 use platform_db_pg::{PgDatabase, PgIdentityStore, PgMigrationRunner};
 use platform_sdk::{CorrelationId, ErrorCode, PermissionKey, RowVersion, Scope, SourceInstanceId};
 
@@ -16,13 +16,16 @@ fn test_pg_url() -> Result<Option<String>, String> {
     let required = std::env::var("NEON_REQUIRE_PG_TESTS").unwrap_or_default() == "1";
     match std::env::var("NEON_TEST_PG_URL") {
         Ok(url) if !url.trim().is_empty() => Ok(Some(url)),
-        _ if required => Err("NEON_REQUIRE_PG_TESTS=1 is set, but NEON_TEST_PG_URL is missing".to_string()),
+        _ if required => {
+            Err("NEON_REQUIRE_PG_TESTS=1 is set, but NEON_TEST_PG_URL is missing".to_string())
+        }
         _ => Ok(None),
     }
 }
 
 #[tokio::test]
-async fn pg_full_pr04_identity_rbac_and_negative_security_suite() -> Result<(), Box<dyn std::error::Error>> {
+async fn pg_full_pr04_identity_rbac_and_negative_security_suite()
+-> Result<(), Box<dyn std::error::Error>> {
     let Some(url) = test_pg_url().map_err(|e| e)? else {
         return Ok(());
     };
@@ -66,41 +69,79 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite() -> Result<(), 
     let admin_pass = SecretString::new("PgNeonAdminPass2026!");
     let suffix = format!("{}", &uuid::Uuid::now_v7().simple().to_string()[..6]);
     let admin_name = format!("pgadmin_{suffix}");
-    bootstrap.init_first_admin(&admin_name, "PG Admin", &admin_pass).await?;
+    bootstrap
+        .init_first_admin(&admin_name, "PG Admin", &admin_pass)
+        .await?;
 
     // Second bootstrap MUST fail with ConflictDomainState
     let repeat_err = bootstrap
         .init_first_admin(&format!("pgadmin2_{suffix}"), "Second", &admin_pass)
         .await
         .err();
-    assert_eq!(repeat_err.as_ref().map(|e| e.code()), Some(ErrorCode::ConflictDomainState));
+    assert_eq!(
+        repeat_err.as_ref().map(|e| e.code()),
+        Some(ErrorCode::ConflictDomainState)
+    );
 
     {
-        let login = auth_svc.login(&admin_name, &admin_pass, Some("127.0.0.1"), None, None).await?;
+        let login = auth_svc
+            .login(&admin_name, &admin_pass, Some("127.0.0.1"), None, None)
+            .await?;
         let (_s, _u, admin_ctx) = auth_svc
-            .authenticate_session(login.tokens.session_token.expose_secret(), CorrelationId::generate())
+            .authenticate_session(
+                login.tokens.session_token.expose_secret(),
+                CorrelationId::generate(),
+            )
             .await?;
 
         let org = org_svc
             .create_organization(&admin_ctx, "PG Plant", &format!("PG-ORG-{suffix}"))
             .await?;
-        let site_a = org_svc.create_site(&admin_ctx, org.id, "Site A", &format!("SA-{suffix}")).await?;
-        let site_b = org_svc.create_site(&admin_ctx, org.id, "Site B", &format!("SB-{suffix}")).await?;
-        let dept_a = org_svc.create_department(&admin_ctx, site_a.id, None, "Dept A", &format!("DA-{suffix}")).await?;
+        let site_a = org_svc
+            .create_site(&admin_ctx, org.id, "Site A", &format!("SA-{suffix}"))
+            .await?;
+        let site_b = org_svc
+            .create_site(&admin_ctx, org.id, "Site B", &format!("SB-{suffix}"))
+            .await?;
+        let dept_a = org_svc
+            .create_department(
+                &admin_ctx,
+                site_a.id,
+                None,
+                "Dept A",
+                &format!("DA-{suffix}"),
+            )
+            .await?;
 
         // 412 vs 409 check on PostgreSQL
         assert_eq!(
-            org_svc.update_department(&admin_ctx, dept_a.id, "X", None, RowVersion::new(99), true).await.err().map(|e| e.status()),
+            org_svc
+                .update_department(&admin_ctx, dept_a.id, "X", None, RowVersion::new(99), true)
+                .await
+                .err()
+                .map(|e| e.status()),
             Some(412)
         );
         assert_eq!(
-            org_svc.update_department(&admin_ctx, dept_a.id, "X", None, RowVersion::new(99), false).await.err().map(|e| e.status()),
+            org_svc
+                .update_department(&admin_ctx, dept_a.id, "X", None, RowVersion::new(99), false)
+                .await
+                .err()
+                .map(|e| e.status()),
             Some(409)
         );
 
         // Scoped user on Site A cannot see Site B
         let u_pass = SecretString::new("PgSiteAUserPass2026!");
-        let u_a = authz_svc.create_user(&admin_ctx, &format!("ua_{suffix}"), "User A", &u_pass, &Scope::Global).await?;
+        let u_a = authz_svc
+            .create_user(
+                &admin_ctx,
+                &format!("ua_{suffix}"),
+                "User A",
+                &u_pass,
+                &Scope::Global,
+            )
+            .await?;
         let r_a = authz_svc
             .create_role(
                 &admin_ctx,
@@ -110,10 +151,28 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite() -> Result<(), 
                 &Scope::Global,
             )
             .await?;
-        authz_svc.assign_role(&admin_ctx, u_a.id, r_a.id, Scope::Site { site_id: site_a.id }).await?;
-        let u_login = auth_svc.login(&format!("ua_{suffix}"), &u_pass, Some("127.0.0.1"), None, None).await?;
+        authz_svc
+            .assign_role(
+                &admin_ctx,
+                u_a.id,
+                r_a.id,
+                Scope::Site { site_id: site_a.id },
+            )
+            .await?;
+        let u_login = auth_svc
+            .login(
+                &format!("ua_{suffix}"),
+                &u_pass,
+                Some("127.0.0.1"),
+                None,
+                None,
+            )
+            .await?;
         let (_us, _uu, u_ctx) = auth_svc
-            .authenticate_session(u_login.tokens.session_token.expose_secret(), CorrelationId::generate())
+            .authenticate_session(
+                u_login.tokens.session_token.expose_secret(),
+                CorrelationId::generate(),
+            )
             .await?;
         let sites = org_svc.list_sites(&u_ctx).await?;
         assert!(sites.iter().any(|s| s.id == site_a.id));
@@ -122,9 +181,21 @@ async fn pg_full_pr04_identity_rbac_and_negative_security_suite() -> Result<(), 
         // Password recovery revokes active session atomically
         let new_pass = SecretString::new("PgRecoveredAdmin2026!");
         bootstrap.reset_password(&admin_name, &new_pass).await?;
-        assert!(auth_svc.authenticate_session(login.tokens.session_token.expose_secret(), CorrelationId::generate()).await.is_err());
+        assert!(
+            auth_svc
+                .authenticate_session(
+                    login.tokens.session_token.expose_secret(),
+                    CorrelationId::generate()
+                )
+                .await
+                .is_err()
+        );
         let events = store.list_security_events().await?;
-        assert!(events.iter().any(|e| e.event_type == "security.admin_password_recovered"));
+        assert!(
+            events
+                .iter()
+                .any(|e| e.event_type == "security.admin_password_recovered")
+        );
     }
 
     db.close().await;

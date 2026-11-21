@@ -43,9 +43,7 @@ async fn connect_pg_isolated_if_configured()
     Ok(Some(isolated_db))
 }
 
-async fn apply_core_migrations(
-    db: &PgDatabase,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn apply_core_migrations(db: &PgDatabase) -> Result<(), Box<dyn std::error::Error>> {
     PgMigrationRunner::new(db.clone())
         .run_namespace("core", &platform_db_pg::core_postgres_migrations())
         .await?;

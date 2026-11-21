@@ -37,3 +37,5 @@
 - Post-reconciliation Rust Clippy exposed three platform-core compilation defects (renamed session repository field, incorrect Option handling in PHC parameter parsing, unused import); corrected in `9e5c071`. Follow-up CI must pass before acceptance.
 
 - GitHub compiler/Clippy audit found the archive had regressed PR-03 atomic PG/SQLite migration runners. Restored accepted ACID implementation from `main`, retained `core_{postgres,sqlite}_migrations()` helper via namespace-aware `MigrationSpec::new`, fixed `platform-core` Clippy, and explicitly wrapped six SQLx static-template PG Identity queries with `AssertSqlSafe` following audit. Further CI pending.
+
+- Follow-up Rust/PG CI exposed duplicate `identity_repo` exports after restoring accepted PR-03 adapters; deduplicated them. PR remains Draft and requires renewed seven-check CI.

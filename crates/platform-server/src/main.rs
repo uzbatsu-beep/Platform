@@ -1,74 +1,75 @@
-//! NEON Composition Root (`neon` binary).
+//! NEON Platform Server & Standalone Administrative CLI binary (`neon`).
 
-#[cfg(all(feature = "db-postgres", feature = "db-sqlite"))]
-compile_error!(
-    "Enable either `db-postgres` (server) or `db-sqlite` (standalone), not both in one build profile."
-);
+use std::process::ExitCode;
 
-#[cfg(not(any(feature = "db-postgres", feature = "db-sqlite")))]
-compile_error!(
-    "Enable one database backend feature: `db-sqlite` (standalone) or `db-postgres` (server)."
-);
-
-use axum::{Json, Router, routing::get};
 use clap::Parser;
-use platform_cli_core::{NeonCli, NeonCommand};
-use platform_core::{PlatformInfo, RuntimeMode};
-use tracing_subscriber::EnvFilter;
-
-fn active_runtime_mode() -> RuntimeMode {
-    #[cfg(feature = "db-sqlite")]
-    {
-        RuntimeMode::Standalone
-    }
-    #[cfg(feature = "db-postgres")]
-    {
-        RuntimeMode::Server
-    }
-}
-
-async fn health_live() -> Json<PlatformInfo> {
-    Json(PlatformInfo::new(active_runtime_mode()))
-}
+use platform_cli_core::{NeonCli, NeonCommand, NeonRuntimeConfig};
+use platform_server::runtime::{init_runtime_bundle, run_admin_cli, serve_http};
 
 #[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
+async fn main() -> ExitCode {
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .json()
-        .init();
+        .try_init();
 
     let cli = NeonCli::parse();
-    match cli.command {
-        NeonCommand::Serve => {
-            let app = Router::new().route("/health/live", get(health_live));
-            let bind_addr = "127.0.0.1:8080";
-            tracing::info!(
-                mode = ?active_runtime_mode(),
-                bind = bind_addr,
-                "NEON PR-01 bootstrap listener starting (/health/live only)"
-            );
-            match tokio::net::TcpListener::bind(bind_addr).await {
-                Ok(listener) => {
-                    if let Err(err) = axum::serve(listener, app).await {
-                        tracing::error!(error = %err, "HTTP server terminated with error");
-                        std::process::exit(1);
-                    }
-                }
-                Err(err) => {
-                    tracing::error!(error = %err, bind = bind_addr, "Failed to bind TCP listener");
-                    std::process::exit(1);
-                }
-            }
+    let raw_cfg = match NeonRuntimeConfig::load(cli.config.as_deref()) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("Configuration error: {err}");
+            return ExitCode::from(2);
         }
-        other => {
-            tracing::warn!(
-                command = ?other,
-                "Subcommand parsed in PR-01 bootstrap; execution handlers are implemented in PR-03..PR-06"
-            );
-            std::process::exit(2);
+    };
+    let validated = match raw_cfg.validate() {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("Configuration validation failed: {err}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match cli.command {
+        NeonCommand::Serve => match serve_http(&validated).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("Server terminated with error: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        NeonCommand::Admin { action } => match run_admin_cli(&validated, &action).await {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("Admin command failed: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        NeonCommand::Migrate { dry_run } => match init_runtime_bundle(&validated, dry_run).await {
+            Ok(bundle) => {
+                println!(
+                    "Database migrations {} (instance_id={})",
+                    if dry_run {
+                        "verified (dry-run)"
+                    } else {
+                        "applied"
+                    },
+                    bundle.instance_id
+                );
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("Migration failed: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        NeonCommand::Backup { .. } => {
+            eprintln!("Backup commands are scheduled for PR-05 (Audit, Backup & Restore).");
+            ExitCode::from(2)
         }
     }
 }

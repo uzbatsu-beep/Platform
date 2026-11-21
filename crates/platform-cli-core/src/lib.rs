@@ -1,11 +1,18 @@
-//! Shared administrative CLI definitions and secure interactive password-prompt helpers
-//! used by both the single Standalone binary (`neon`) and the dedicated Server utility (`neon-cli`).
+//! Shared administrative CLI definitions, runtime configuration loader, and secure password-prompt
+//! helpers used by both the single Standalone binary (`neon`) and the dedicated Server utility (`neon-cli`).
+
+pub mod config;
 
 use std::io::{self, BufRead, Write};
 
 use clap::{Parser, Subcommand};
 use platform_core::identity::{AdminBootstrapService, SecretString};
 use platform_sdk::AppError;
+
+pub use config::{
+    DatabaseSection, NeonRuntimeConfig, RuntimeSection, SecuritySection, TlsSection,
+    ValidatedRuntimeConfig,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -90,6 +97,11 @@ pub fn read_secret_password(
             .read_line(&mut line)
             .map_err(|e| AppError::internal(format!("failed to read password from stdin: {e}")))?;
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+        if trimmed.is_empty() {
+            return Err(AppError::validation(
+                "Password from stdin must not be empty",
+            ));
+        }
         return Ok(SecretString::new(trimmed));
     }
 

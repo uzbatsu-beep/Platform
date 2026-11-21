@@ -2,8 +2,8 @@
 //! Implemented independently by `platform-db-pg` (PostgreSQL 18/19) and `platform-db-sqlite` (SQLite 3.54.1).
 
 use platform_sdk::{
-    AppError, BoxFuture, DepartmentId, LocationId, PermissionGrant, PermissionKey, RoleId,
-    RowVersion, Scope, SiteId, UserId, UtcMillis,
+    AppError, AuthContext, BoxFuture, DepartmentId, LocationId, PermissionGrant, PermissionKey,
+    RoleId, RowVersion, Scope, SiteId, UserId, UtcMillis,
 };
 use uuid::Uuid;
 
@@ -38,9 +38,14 @@ pub trait IdentityRepository: Send + Sync {
         now: UtcMillis,
     ) -> BoxFuture<'a, Result<(), AppError>>;
 
-    /// Transactional deactivation with last-active-global-admin protection.
-    fn deactivate_user_checked<'a>(
+    /// Transactional deactivation eliminating IDOR & TOCTOU:
+    /// 1. Loads target user and ALL active assignment scopes inside the DB transaction.
+    /// 2. Authorizes `caller_ctx` against actual scopes (NEVER client-supplied scope).
+    /// 3. Enforces last-active-global-admin invariant under transaction lock.
+    /// 4. Deactivates user AND revokes all active sessions atomically in the same transaction.
+    fn deactivate_user_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         target_user_id: UserId,
         expected_row_version: RowVersion,
         is_if_match: bool,
@@ -56,9 +61,13 @@ pub trait IdentityRepository: Send + Sync {
         assignment: RoleAssignment,
     ) -> BoxFuture<'a, Result<RoleAssignment, AppError>>;
 
-    /// Transactional removal of a role assignment with last-active-global-admin protection.
-    fn revoke_assignment_checked<'a>(
+    /// Transactional removal of a role assignment eliminating IDOR & TOCTOU:
+    /// 1. Loads actual assignment (`user_id`, `role_id`, `scope`) and role permissions inside tx.
+    /// 2. Verifies `caller_ctx` holds `core:role:manage` AND every permission of the role covering actual `scope`.
+    /// 3. Enforces last-active-global-admin invariant before deleting.
+    fn revoke_assignment_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         assignment_id: Uuid,
     ) -> BoxFuture<'a, Result<(), AppError>>;
 

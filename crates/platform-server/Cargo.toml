@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "platform_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "neon"
 path = "src/main.rs"
@@ -28,6 +32,12 @@ platform-core.workspace = true
 platform-db-pg = { workspace = true, optional = true }
 platform-db-sqlite = { workspace = true, optional = true }
 platform-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
+toml.workspace = true
+tower.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true

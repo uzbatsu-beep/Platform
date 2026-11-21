@@ -5,13 +5,13 @@ use std::collections::HashSet;
 use platform_core::identity::{
     CORE_PERMISSIONS, Department, IdentityRepository, Location, Organization,
     OrganizationRepository, Role, RoleAssignment, SecretString, SecurityEvent, Session,
-    SessionRepository, Site, User,
+    SessionRepository, Site, User, authorize_assignment_revocation, authorize_user_deactivation,
 };
 use platform_core::{iso8601_to_utc_millis, utc_millis_to_iso8601};
 use platform_sdk::{
-    AppError, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId, PermissionGrant,
-    PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId, SourceInstanceId, UserId,
-    UtcMillis,
+    AppError, AuthContext, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId,
+    PermissionGrant, PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId,
+    SourceInstanceId, UserId, UtcMillis,
 };
 use sqlx::{Row, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -108,6 +108,88 @@ impl SqliteIdentityStore {
                 None => None,
             },
         })
+    }
+
+    /// Loads or initializes the persistent `SourceInstanceId` stored in `core_instance_meta`.
+    pub async fn ensure_source_instance_id(&self) -> Result<SourceInstanceId, AppError> {
+        let existing =
+            sqlx::query("SELECT source_instance_id FROM core_instance_meta WHERE id = 1")
+                .fetch_optional(self.db.writer_pool())
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+        if let Some(row) = existing {
+            let raw: String = row
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            return SourceInstanceId::try_from_uuid(Self::parse_uuid(&raw)?)
+                .map_err(|e| AppError::internal(e.to_string()));
+        }
+        let fresh = SourceInstanceId::generate();
+        let now_iso = utc_millis_to_iso8601(UtcMillis::now());
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO core_instance_meta (id, source_instance_id, schema_version, created_at, updated_at)
+            VALUES (1, ?, 1, ?, ?)
+            "#,
+        )
+        .bind(fresh.to_string())
+        .bind(&now_iso)
+        .bind(&now_iso)
+        .execute(self.db.writer_pool())
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+        let row = sqlx::query("SELECT source_instance_id FROM core_instance_meta WHERE id = 1")
+            .fetch_one(self.db.writer_pool())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let raw: String = row
+            .try_get("source_instance_id")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        SourceInstanceId::try_from_uuid(Self::parse_uuid(&raw)?)
+            .map_err(|e| AppError::internal(e.to_string()))
+    }
+
+    fn parse_scope_from_row(row: &SqliteRow) -> Result<Scope, AppError> {
+        let kind: String = row
+            .try_get("scope_kind")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        match kind.as_str() {
+            "global" => Ok(Scope::Global),
+            "site" => {
+                let s: String = row
+                    .try_get("scope_site_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                Ok(Scope::Site {
+                    site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?)
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                })
+            }
+            "department" => {
+                let s: String = row
+                    .try_get("scope_site_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                let d: String = row
+                    .try_get("scope_department_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                Ok(Scope::Department {
+                    site_id: SiteId::try_from_uuid(Self::parse_uuid(&s)?)
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                    department_id: DepartmentId::try_from_uuid(Self::parse_uuid(&d)?)
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                })
+            }
+            "own" => {
+                let o: String = row
+                    .try_get("scope_owner_user_id")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                Ok(Scope::Own {
+                    user_id: UserId::try_from_uuid(Self::parse_uuid(&o)?)
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                })
+            }
+            other => Err(AppError::internal(format!("unknown scope_kind: {other}"))),
+        }
     }
 
     fn scope_columns(
@@ -300,8 +382,9 @@ impl IdentityRepository for SqliteIdentityStore {
         })
     }
 
-    fn deactivate_user_checked<'a>(
+    fn deactivate_user_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         target_user_id: UserId,
         expected_row_version: RowVersion,
         is_if_match: bool,
@@ -315,14 +398,51 @@ impl IdentityRepository for SqliteIdentityStore {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
-            // Count active users with Global `core:role:manage` OTHER than target_user_id
+            let existing = sqlx::query("SELECT * FROM core_users WHERE id = ?")
+                .bind(target_user_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let Some(row) = existing else {
+                let _ = tx.rollback().await;
+                return Err(AppError::not_found("User not found"));
+            };
+            let current = Self::map_user(&row)?;
+
+            // Load ALL active assignment scopes of target_user_id inside the transaction (eliminates IDOR & TOCTOU).
+            let scope_rows = sqlx::query(
+                r#"
+                SELECT a.scope_kind, a.scope_site_id, a.scope_department_id, a.scope_owner_user_id
+                FROM core_role_assignments a
+                JOIN core_roles r ON r.id = a.role_id
+                WHERE a.user_id = ? AND r.archived_at IS NULL
+                "#,
+            )
+            .bind(target_user_id.to_string())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let mut target_scopes = Vec::with_capacity(scope_rows.len());
+            for sr in &scope_rows {
+                target_scopes.push(Self::parse_scope_from_row(sr)?);
+            }
+
+            if let Err(err) = authorize_user_deactivation(caller_ctx, &target_scopes) {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+
+            // Protect the last active global administrator under single-writer transaction.
             let target_is_global_admin: i64 = sqlx::query(
                 r#"
                 SELECT COUNT(DISTINCT a.user_id)
                 FROM core_role_assignments a
                 JOIN core_role_permissions rp ON rp.role_id = a.role_id
+                JOIN core_roles r ON r.id = a.role_id
                 JOIN core_users u ON u.id = a.user_id
-                WHERE a.user_id = ? AND u.is_active = 1 AND a.scope_kind = 'global'
+                WHERE a.user_id = ? AND u.is_active = 1 AND u.archived_at IS NULL
+                  AND r.archived_at IS NULL AND a.scope_kind = 'global'
                   AND rp.permission_key = 'core:role:manage'
                 "#,
             )
@@ -339,8 +459,10 @@ impl IdentityRepository for SqliteIdentityStore {
                     SELECT COUNT(DISTINCT a.user_id)
                     FROM core_role_assignments a
                     JOIN core_role_permissions rp ON rp.role_id = a.role_id
+                    JOIN core_roles r ON r.id = a.role_id
                     JOIN core_users u ON u.id = a.user_id
-                    WHERE a.user_id <> ? AND u.is_active = 1 AND a.scope_kind = 'global'
+                    WHERE a.user_id <> ? AND u.is_active = 1 AND u.archived_at IS NULL
+                      AND r.archived_at IS NULL AND a.scope_kind = 'global'
                       AND rp.permission_key = 'core:role:manage'
                     "#,
                 )
@@ -359,16 +481,6 @@ impl IdentityRepository for SqliteIdentityStore {
                 }
             }
 
-            let existing = sqlx::query("SELECT * FROM core_users WHERE id = ?")
-                .bind(target_user_id.to_string())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let Some(row) = existing else {
-                let _ = tx.rollback().await;
-                return Err(AppError::not_found("User not found"));
-            };
-            let current = Self::map_user(&row)?;
             if current.row_version != expected_row_version {
                 let _ = tx.rollback().await;
                 return Err(if is_if_match {
@@ -378,13 +490,24 @@ impl IdentityRepository for SqliteIdentityStore {
                 });
             }
 
+            let now_iso = utc_millis_to_iso8601(now);
             sqlx::query("UPDATE core_users SET is_active = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?")
-                .bind(utc_millis_to_iso8601(now))
+                .bind(&now_iso)
                 .bind(target_user_id.to_string())
                 .bind(expected_row_version.get() as i64)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
+
+            // Atomic session revocation inside the same transaction.
+            sqlx::query(
+                "UPDATE core_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            )
+            .bind(&now_iso)
+            .bind(target_user_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
 
             let updated_row = sqlx::query("SELECT * FROM core_users WHERE id = ?")
                 .bind(target_user_id.to_string())
@@ -472,6 +595,9 @@ impl IdentityRepository for SqliteIdentityStore {
             let updated_s: String = r
                 .try_get("updated_at")
                 .map_err(|e| AppError::internal(e.to_string()))?;
+            let archived_s: Option<String> = r
+                .try_get("archived_at")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Role {
                 id,
                 name: r
@@ -489,7 +615,10 @@ impl IdentityRepository for SqliteIdentityStore {
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: Self::parse_ts(&created_s)?,
                 updated_at: Self::parse_ts(&updated_s)?,
-                archived_at: None,
+                archived_at: match archived_s {
+                    Some(s) => Some(Self::parse_ts(&s)?),
+                    None => None,
+                },
             }))
         })
     }
@@ -530,8 +659,9 @@ impl IdentityRepository for SqliteIdentityStore {
         })
     }
 
-    fn revoke_assignment_checked<'a>(
+    fn revoke_assignment_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         assignment_id: Uuid,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
@@ -541,28 +671,80 @@ impl IdentityRepository for SqliteIdentityStore {
                 .begin()
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
-            let remaining: i64 = sqlx::query(
+
+            // Load actual assignment row inside transaction (eliminates IDOR & TOCTOU).
+            let assignment_row = sqlx::query(
                 r#"
-                SELECT COUNT(DISTINCT a.user_id)
-                FROM core_role_assignments a
-                JOIN core_role_permissions rp ON rp.role_id = a.role_id
-                JOIN core_users u ON u.id = a.user_id
-                WHERE a.id <> ? AND u.is_active = 1 AND a.scope_kind = 'global'
-                  AND rp.permission_key = 'core:role:manage'
+                SELECT role_id, scope_kind, scope_site_id, scope_department_id, scope_owner_user_id
+                FROM core_role_assignments
+                WHERE id = ?
                 "#,
             )
             .bind(assignment_id.to_string())
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| AppError::internal(e.to_string()))?
-            .try_get(0)
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            if remaining == 0 {
+            let Some(arow) = assignment_row else {
                 let _ = tx.rollback().await;
-                return Err(AppError::domain_conflict(
-                    "Cannot revoke the last global administrator assignment",
-                ));
+                return Err(AppError::not_found("Role assignment not found"));
+            };
+            let actual_scope = Self::parse_scope_from_row(&arow)?;
+            let role_id_str: String = arow
+                .try_get("role_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let perm_rows =
+                sqlx::query("SELECT permission_key FROM core_role_permissions WHERE role_id = ?")
+                    .bind(&role_id_str)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut role_perms = Vec::with_capacity(perm_rows.len());
+            for pr in perm_rows {
+                let key_s: String = pr
+                    .try_get("permission_key")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                role_perms.push(
+                    PermissionKey::parse(&key_s).map_err(|e| AppError::internal(e.to_string()))?,
+                );
+            }
+
+            if let Err(err) =
+                authorize_assignment_revocation(caller_ctx, &actual_scope, &role_perms)
+            {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+
+            let is_global_admin_grant = matches!(actual_scope, Scope::Global)
+                && role_perms.iter().any(|p| p.as_str() == "core:role:manage");
+            if is_global_admin_grant {
+                let remaining: i64 = sqlx::query(
+                    r#"
+                    SELECT COUNT(DISTINCT a.user_id)
+                    FROM core_role_assignments a
+                    JOIN core_role_permissions rp ON rp.role_id = a.role_id
+                    JOIN core_roles r ON r.id = a.role_id
+                    JOIN core_users u ON u.id = a.user_id
+                    WHERE a.id <> ? AND u.is_active = 1 AND u.archived_at IS NULL
+                      AND r.archived_at IS NULL AND a.scope_kind = 'global'
+                      AND rp.permission_key = 'core:role:manage'
+                    "#,
+                )
+                .bind(assignment_id.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+                .try_get(0)
+                .map_err(|e| AppError::internal(e.to_string()))?;
+
+                if remaining == 0 {
+                    let _ = tx.rollback().await;
+                    return Err(AppError::domain_conflict(
+                        "Cannot revoke the last global administrator assignment",
+                    ));
+                }
             }
 
             sqlx::query("DELETE FROM core_role_assignments WHERE id = ?")
@@ -1444,8 +1626,10 @@ impl OrganizationRepository for SqliteIdentityStore {
                         site_id: gs,
                         department_id,
                     } = g.scope
-                        && gs == site_id
                     {
+                        if gs != site_id {
+                            continue;
+                        }
                         let part = sqlx::query("SELECT id FROM core_departments WHERE id = ? AND site_id = ? AND archived_at IS NULL")
                             .bind(department_id.to_string())
                             .bind(site_id.to_string())

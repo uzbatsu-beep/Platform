@@ -5,12 +5,12 @@ use std::collections::HashSet;
 use platform_core::identity::{
     CORE_PERMISSIONS, Department, IdentityRepository, Location, Organization,
     OrganizationRepository, Role, RoleAssignment, SecretString, SecurityEvent, Session,
-    SessionRepository, Site, User,
+    SessionRepository, Site, User, authorize_assignment_revocation, authorize_user_deactivation,
 };
 use platform_sdk::{
-    AppError, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId, PermissionGrant,
-    PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId, SourceInstanceId, UserId,
-    UtcMillis,
+    AppError, AuthContext, BoxFuture, DepartmentId, EmployeeId, LocationId, OrganizationId,
+    PermissionGrant, PermissionKey, RoleId, RowVersion, SchemaVersion, Scope, SiteId,
+    SourceInstanceId, UserId, UtcMillis,
 };
 use sqlx::{AssertSqlSafe, Row, postgres::PgRow};
 use uuid::Uuid;
@@ -97,6 +97,80 @@ impl PgIdentityStore {
             updated_at: UtcMillis::from_unix_millis(updated_ms.max(0) as u64),
             archived_at: archived_ms.map(|m| UtcMillis::from_unix_millis(m.max(0) as u64)),
         })
+    }
+
+    /// Loads or initializes the persistent `SourceInstanceId` stored in `core.core_instance_meta`.
+    pub async fn ensure_source_instance_id(&self) -> Result<SourceInstanceId, AppError> {
+        let existing =
+            sqlx::query("SELECT source_instance_id FROM core.core_instance_meta WHERE id = 1")
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+        if let Some(row) = existing {
+            let id: Uuid = row
+                .try_get("source_instance_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            return SourceInstanceId::try_from_uuid(id)
+                .map_err(|e| AppError::internal(e.to_string()));
+        }
+        let fresh = SourceInstanceId::generate();
+        sqlx::query(
+            r#"
+            INSERT INTO core.core_instance_meta (id, source_instance_id, schema_version)
+            VALUES (1, $1, 1)
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(fresh.as_uuid())
+        .execute(self.db.pool())
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+        let row =
+            sqlx::query("SELECT source_instance_id FROM core.core_instance_meta WHERE id = 1")
+                .fetch_one(self.db.pool())
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+        let id: Uuid = row
+            .try_get("source_instance_id")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        SourceInstanceId::try_from_uuid(id).map_err(|e| AppError::internal(e.to_string()))
+    }
+
+    fn parse_scope_from_row(row: &PgRow) -> Result<Scope, AppError> {
+        let kind: String = row
+            .try_get("scope_kind")
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        match kind.as_str() {
+            "global" => Ok(Scope::Global),
+            "site" => Ok(Scope::Site {
+                site_id: SiteId::try_from_uuid(
+                    row.try_get("scope_site_id")
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            }),
+            "department" => Ok(Scope::Department {
+                site_id: SiteId::try_from_uuid(
+                    row.try_get("scope_site_id")
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+                department_id: DepartmentId::try_from_uuid(
+                    row.try_get("scope_department_id")
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            }),
+            "own" => Ok(Scope::Own {
+                user_id: UserId::try_from_uuid(
+                    row.try_get("scope_owner_user_id")
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                )
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            }),
+            other => Err(AppError::internal(format!("unknown scope_kind: {other}"))),
+        }
     }
 
     fn scope_columns(scope: &Scope) -> (&'static str, Option<Uuid>, Option<Uuid>, Option<Uuid>) {
@@ -286,8 +360,9 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn deactivate_user_checked<'a>(
+    fn deactivate_user_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         target_user_id: UserId,
         expected_row_version: RowVersion,
         is_if_match: bool,
@@ -306,13 +381,51 @@ impl IdentityRepository for PgIdentityStore {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
+            let sel = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
+            let existing = sqlx::query(AssertSqlSafe(sel.clone()))
+                .bind(target_user_id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let Some(row) = existing else {
+                let _ = tx.rollback().await;
+                return Err(AppError::not_found("User not found"));
+            };
+            let current = Self::map_user(&row)?;
+
+            // Load ALL active assignment scopes of target_user_id inside the transaction.
+            let scope_rows = sqlx::query(
+                r#"
+                SELECT a.scope_kind, a.scope_site_id, a.scope_department_id, a.scope_owner_user_id
+                FROM core.core_role_assignments a
+                JOIN core.core_roles r ON r.id = a.role_id
+                WHERE a.user_id = $1 AND r.archived_at IS NULL
+                "#,
+            )
+            .bind(target_user_id.as_uuid())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let mut target_scopes = Vec::with_capacity(scope_rows.len());
+            for sr in &scope_rows {
+                target_scopes.push(Self::parse_scope_from_row(sr)?);
+            }
+
+            if let Err(err) = authorize_user_deactivation(caller_ctx, &target_scopes) {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+
             let target_is_admin: i64 = sqlx::query(
                 r#"
                 SELECT COUNT(DISTINCT a.user_id)
                 FROM core.core_role_assignments a
                 JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
+                JOIN core.core_roles r ON r.id = a.role_id
                 JOIN core.core_users u ON u.id = a.user_id
-                WHERE a.user_id = $1 AND u.is_active = TRUE AND a.scope_kind = 'global'
+                WHERE a.user_id = $1 AND u.is_active = TRUE AND u.archived_at IS NULL
+                  AND r.archived_at IS NULL AND a.scope_kind = 'global'
                   AND rp.permission_key = 'core:role:manage'
                 "#,
             )
@@ -329,8 +442,10 @@ impl IdentityRepository for PgIdentityStore {
                     SELECT COUNT(DISTINCT a.user_id)
                     FROM core.core_role_assignments a
                     JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
+                    JOIN core.core_roles r ON r.id = a.role_id
                     JOIN core.core_users u ON u.id = a.user_id
-                    WHERE a.user_id <> $1 AND u.is_active = TRUE AND a.scope_kind = 'global'
+                    WHERE a.user_id <> $1 AND u.is_active = TRUE AND u.archived_at IS NULL
+                      AND r.archived_at IS NULL AND a.scope_kind = 'global'
                       AND rp.permission_key = 'core:role:manage'
                     "#,
                 )
@@ -349,17 +464,6 @@ impl IdentityRepository for PgIdentityStore {
                 }
             }
 
-            let sel = format!("SELECT {USER_SELECT_COLS} FROM core.core_users WHERE id = $1");
-            let existing = sqlx::query(AssertSqlSafe(sel.clone()))
-                .bind(target_user_id.as_uuid())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let Some(row) = existing else {
-                let _ = tx.rollback().await;
-                return Err(AppError::not_found("User not found"));
-            };
-            let current = Self::map_user(&row)?;
             if current.row_version != expected_row_version {
                 let _ = tx.rollback().await;
                 return Err(if is_if_match {
@@ -369,17 +473,28 @@ impl IdentityRepository for PgIdentityStore {
                 });
             }
 
+            let now_ms = Self::ms_i64(now)?;
             sqlx::query(
                 "UPDATE core.core_users SET is_active = FALSE, updated_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond'), row_version = row_version + 1 WHERE id = $2 AND row_version = $3",
             )
-            .bind(Self::ms_i64(now)?)
+            .bind(now_ms)
             .bind(target_user_id.as_uuid())
             .bind(expected_row_version.get() as i64)
             .execute(&mut *tx)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            let updated_row = sqlx::query(AssertSqlSafe(sel))
+            // Atomic session revocation inside the same transaction.
+            sqlx::query(
+                "UPDATE core.core_sessions SET revoked_at = TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($1::bigint * INTERVAL '1 millisecond') WHERE user_id = $2 AND revoked_at IS NULL",
+            )
+            .bind(now_ms)
+            .bind(target_user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let updated_row = sqlx::query(AssertSqlSafe(sel.clone()))
                 .bind(target_user_id.as_uuid())
                 .fetch_one(&mut *tx)
                 .await
@@ -444,7 +559,8 @@ impl IdentityRepository for PgIdentityStore {
                 r#"
                 SELECT id, name, description, is_system, source_instance_id, schema_version, row_version,
                        ((EXTRACT(EPOCH FROM created_at) * 1000)::numeric)::bigint AS created_ms,
-                       ((EXTRACT(EPOCH FROM updated_at) * 1000)::numeric)::bigint AS updated_ms
+                       ((EXTRACT(EPOCH FROM updated_at) * 1000)::numeric)::bigint AS updated_ms,
+                       CASE WHEN archived_at IS NULL THEN NULL ELSE ((EXTRACT(EPOCH FROM archived_at) * 1000)::numeric)::bigint END AS archived_ms
                 FROM core.core_roles WHERE id = $1
                 "#,
             )
@@ -471,6 +587,9 @@ impl IdentityRepository for PgIdentityStore {
             let um: i64 = r
                 .try_get("updated_ms")
                 .map_err(|e| AppError::internal(e.to_string()))?;
+            let am: Option<i64> = r
+                .try_get("archived_ms")
+                .map_err(|e| AppError::internal(e.to_string()))?;
             Ok(Some(Role {
                 id,
                 name: r
@@ -490,7 +609,7 @@ impl IdentityRepository for PgIdentityStore {
                 row_version: RowVersion::new(rv.max(1) as u64),
                 created_at: UtcMillis::from_unix_millis(cm.max(0) as u64),
                 updated_at: UtcMillis::from_unix_millis(um.max(0) as u64),
-                archived_at: None,
+                archived_at: am.map(|m| UtcMillis::from_unix_millis(m.max(0) as u64)),
             }))
         })
     }
@@ -534,8 +653,9 @@ impl IdentityRepository for PgIdentityStore {
         })
     }
 
-    fn revoke_assignment_checked<'a>(
+    fn revoke_assignment_authorized<'a>(
         &'a self,
+        caller_ctx: &'a AuthContext,
         assignment_id: Uuid,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
@@ -551,28 +671,79 @@ impl IdentityRepository for PgIdentityStore {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
 
-            let remaining: i64 = sqlx::query(
+            let assignment_row = sqlx::query(
                 r#"
-                SELECT COUNT(DISTINCT a.user_id)
-                FROM core.core_role_assignments a
-                JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
-                JOIN core.core_users u ON u.id = a.user_id
-                WHERE a.id <> $1 AND u.is_active = TRUE AND a.scope_kind = 'global'
-                  AND rp.permission_key = 'core:role:manage'
+                SELECT role_id, scope_kind, scope_site_id, scope_department_id, scope_owner_user_id
+                FROM core.core_role_assignments
+                WHERE id = $1
                 "#,
             )
             .bind(assignment_id)
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| AppError::internal(e.to_string()))?
-            .try_get(0)
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-            if remaining == 0 {
+            let Some(arow) = assignment_row else {
                 let _ = tx.rollback().await;
-                return Err(AppError::domain_conflict(
-                    "Cannot revoke the last global administrator assignment",
-                ));
+                return Err(AppError::not_found("Role assignment not found"));
+            };
+            let actual_scope = Self::parse_scope_from_row(&arow)?;
+            let role_id: Uuid = arow
+                .try_get("role_id")
+                .map_err(|e| AppError::internal(e.to_string()))?;
+
+            let perm_rows = sqlx::query(
+                "SELECT permission_key FROM core.core_role_permissions WHERE role_id = $1",
+            )
+            .bind(role_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+            let mut role_perms = Vec::with_capacity(perm_rows.len());
+            for pr in perm_rows {
+                let key_s: String = pr
+                    .try_get("permission_key")
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                role_perms.push(
+                    PermissionKey::parse(&key_s).map_err(|e| AppError::internal(e.to_string()))?,
+                );
+            }
+
+            if let Err(err) =
+                authorize_assignment_revocation(caller_ctx, &actual_scope, &role_perms)
+            {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+
+            let is_global_admin_grant = matches!(actual_scope, Scope::Global)
+                && role_perms.iter().any(|p| p.as_str() == "core:role:manage");
+            if is_global_admin_grant {
+                let remaining: i64 = sqlx::query(
+                    r#"
+                    SELECT COUNT(DISTINCT a.user_id)
+                    FROM core.core_role_assignments a
+                    JOIN core.core_role_permissions rp ON rp.role_id = a.role_id
+                    JOIN core.core_roles r ON r.id = a.role_id
+                    JOIN core.core_users u ON u.id = a.user_id
+                    WHERE a.id <> $1 AND u.is_active = TRUE AND u.archived_at IS NULL
+                      AND r.archived_at IS NULL AND a.scope_kind = 'global'
+                      AND rp.permission_key = 'core:role:manage'
+                    "#,
+                )
+                .bind(assignment_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+                .try_get(0)
+                .map_err(|e| AppError::internal(e.to_string()))?;
+
+                if remaining == 0 {
+                    let _ = tx.rollback().await;
+                    return Err(AppError::domain_conflict(
+                        "Cannot revoke the last global administrator assignment",
+                    ));
+                }
             }
 
             sqlx::query("DELETE FROM core.core_role_assignments WHERE id = $1")

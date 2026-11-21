@@ -1,4 +1,4 @@
-//! Pluggable `AuthProvider` abstraction and `LocalAuthProvider` (Argon2id).
+//! Pluggable `AuthProvider` abstraction and `LocalAuthProvider` (Argon2id via blocking pool).
 //! Future OIDC/LDAP providers plug into `AuthProvider` without rewriting Core application services.
 
 use std::sync::Arc;
@@ -50,14 +50,15 @@ impl AuthProvider for LocalAuthProvider {
         Box::pin(async move {
             let norm = normalize_username(username);
             let Some(user) = self.repo.find_user_by_username(&norm).await? else {
-                // Timing equalization: run real Argon2id dummy verification so unknown usernames
-                // do not return orders of magnitude faster than known usernames.
-                self.hasher.verify_dummy(password);
+                // Timing equalization offloaded onto blocking pool so Tokio workers never stall.
+                self.hasher.verify_dummy_async(password.clone()).await;
                 return Err(AppError::unauthorized("Invalid username or password"));
             };
 
-            let (matched, needs_rehash) =
-                self.hasher.verify_password(password, &user.password_hash)?;
+            let (matched, needs_rehash) = self
+                .hasher
+                .verify_password_async(password.clone(), user.password_hash.clone())
+                .await?;
 
             if !matched || !user.is_active || user.archived_at.is_some() {
                 return Err(AppError::unauthorized("Invalid username or password"));
@@ -65,7 +66,10 @@ impl AuthProvider for LocalAuthProvider {
 
             let mut rehashed = false;
             if needs_rehash {
-                let upgraded_phc = self.hasher.hash_new_password(password)?;
+                let upgraded_phc = self
+                    .hasher
+                    .hash_new_password_async(password.clone())
+                    .await?;
                 self.repo
                     .update_password_hash(user.id, upgraded_phc, UtcMillis::now())
                     .await?;

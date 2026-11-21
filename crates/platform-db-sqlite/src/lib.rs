@@ -657,6 +657,25 @@ impl ModuleMigrator for SqliteMigrationRunner {
     }
 }
 
+/// Embedded Core migration list. Preserves the accepted PR-03 ACID migration runner.
+#[must_use]
+pub fn core_sqlite_migrations() -> Vec<MigrationSpec> {
+    vec![
+        MigrationSpec::new(
+            "core",
+            1,
+            "init_core_metadata",
+            include_str!("../../../migrations/sqlite/core/0001_init_core_metadata.sql"),
+        ),
+        MigrationSpec::new(
+            "core",
+            2,
+            "identity_rbac_org",
+            include_str!("../../../migrations/sqlite/core/0002_identity_rbac_org.sql"),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

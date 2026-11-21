@@ -1,5 +1,5 @@
 //! Identity, AuthProvider (Argon2id), Server-Side Sessions, CSRF, Rate Limiting,
-//! Scoped RBAC, Organization hierarchy, and Admin Bootstrap/Recovery.
+//! Client IP Resolution, Scoped RBAC, Organization hierarchy, and Admin Bootstrap/Recovery.
 
 pub mod auth_provider;
 pub mod models;
@@ -16,10 +16,10 @@ pub use models::{
 pub use password::{Argon2Config, PasswordHasherService, PasswordPolicy};
 pub use ports::{IdentityRepository, OrganizationRepository, SessionRepository};
 pub use security::{
-    CookiePolicy, CsrfService, LoginRateLimiter, RateLimitConfig, SessionPolicy, SessionTokens,
-    ct_eq, generate_opaque_token,
+    ClientIpResolver, CookiePolicy, CsrfService, LoginRateLimiter, RateLimitConfig, SessionPolicy,
+    SessionTokens, ct_eq, generate_opaque_token,
 };
 pub use services::{
     AdminBootstrapService, AuthenticationService, AuthorizationService, LoginOutcome,
-    OrganizationService,
+    OrganizationService, authorize_assignment_revocation, authorize_user_deactivation,
 };

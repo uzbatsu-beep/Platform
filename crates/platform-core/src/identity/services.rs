@@ -185,10 +185,49 @@ impl AuthenticationService {
     }
 }
 
+/// Strict multi-scope authorization rule for user deactivation (eliminates client-supplied scope IDOR):
+/// - If the target user has active role assignments, the caller MUST hold `core:user:manage`
+///   covering EVERY active scope of the target user (including `Scope::Global` if present).
+/// - If the target user has no active role assignments yet, only a caller holding `core:user:manage`
+///   at `Scope::Global` may deactivate them.
+pub fn authorize_user_deactivation(
+    caller_ctx: &AuthContext,
+    target_scopes: &[Scope],
+) -> Result<(), AppError> {
+    let manage_users =
+        PermissionKey::parse("core:user:manage").map_err(|e| AppError::internal(e.to_string()))?;
+    if target_scopes.is_empty() {
+        caller_ctx.require_permission(&manage_users, &Scope::Global)?;
+        return Ok(());
+    }
+    for scope in target_scopes {
+        caller_ctx.require_permission(&manage_users, scope)?;
+    }
+    Ok(())
+}
+
+/// Strict authorization rule for revoking an existing role assignment (eliminates client-supplied scope IDOR):
+/// - Caller MUST hold `core:role:manage` covering the assignment's ACTUAL DB `scope`.
+/// - Caller MUST ALSO hold EVERY permission granted by that role covering the actual `scope`
+///   (prevents revoking a more-privileged role assignment even within the same site/department).
+pub fn authorize_assignment_revocation(
+    caller_ctx: &AuthContext,
+    actual_scope: &Scope,
+    role_permissions: &[PermissionKey],
+) -> Result<(), AppError> {
+    let manage_roles =
+        PermissionKey::parse("core:role:manage").map_err(|e| AppError::internal(e.to_string()))?;
+    caller_ctx.require_permission(&manage_roles, actual_scope)?;
+    for perm in role_permissions {
+        caller_ctx.require_permission(perm, actual_scope)?;
+    }
+    Ok(())
+}
+
 /// Application service enforcing Scoped RBAC, delegation bounds, and last-admin protection.
 pub struct AuthorizationService {
     identity_repo: Arc<dyn IdentityRepository>,
-    session_repo: Arc<dyn SessionRepository>,
+    _session_repo: Arc<dyn SessionRepository>,
     org_repo: Arc<dyn OrganizationRepository>,
     hasher: PasswordHasherService,
     instance_id: SourceInstanceId,
@@ -205,7 +244,7 @@ impl AuthorizationService {
     ) -> Self {
         Self {
             identity_repo,
-            session_repo,
+            _session_repo: session_repo,
             org_repo,
             hasher,
             instance_id,
@@ -230,7 +269,10 @@ impl AuthorizationService {
                 "Username must be between 3 and 64 characters",
             ));
         }
-        let phc = self.hasher.hash_new_password(password)?;
+        let phc = self
+            .hasher
+            .hash_new_password_async(password.clone())
+            .await?;
         let now = UtcMillis::now();
         let user = User {
             id: UserId::generate(),
@@ -278,28 +320,20 @@ impl AuthorizationService {
             .await
     }
 
+    /// Deactivates `target_user_id` after verifying `ctx` covers ALL actual DB scopes of the target
+    /// user inside the same transaction (zero reliance on client-supplied `target_scope`), preserving
+    /// last-global-admin protection and revoking all active sessions atomically.
     pub async fn deactivate_user(
         &self,
         ctx: &AuthContext,
         target_user_id: UserId,
-        target_scope: &Scope,
         expected_version: RowVersion,
         is_if_match: bool,
     ) -> Result<User, AppError> {
-        let perm = PermissionKey::parse("core:user:manage")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        ctx.require_permission(&perm, target_scope)?;
-
         let now = UtcMillis::now();
-        let updated = self
-            .identity_repo
-            .deactivate_user_checked(target_user_id, expected_version, is_if_match, now)
-            .await?;
-        let _ = self
-            .session_repo
-            .revoke_all_user_sessions(target_user_id, now)
-            .await?;
-        Ok(updated)
+        self.identity_repo
+            .deactivate_user_authorized(ctx, target_user_id, expected_version, is_if_match, now)
+            .await
     }
 
     pub async fn create_role(
@@ -357,9 +391,23 @@ impl AuthorizationService {
             ));
         }
 
-        let role_perms = self.identity_repo.list_role_permissions(role_id).await?;
+        let Some(target_user) = self.identity_repo.find_user_by_id(target_user_id).await? else {
+            return Err(AppError::not_found("Target user not found"));
+        };
+        if !target_user.is_active || target_user.archived_at.is_some() {
+            return Err(AppError::domain_conflict(
+                "Cannot assign role to inactive or archived user",
+            ));
+        }
+        let Some(role) = self.identity_repo.find_role_by_id(role_id).await? else {
+            return Err(AppError::not_found("Role not found"));
+        };
+        if role.archived_at.is_some() {
+            return Err(AppError::domain_conflict("Cannot assign an archived role"));
+        }
+        let role_perms = role.permissions;
         if role_perms.is_empty() {
-            return Err(AppError::not_found("Role not found or has no permissions"));
+            return Err(AppError::not_found("Role has no permissions"));
         }
         for perm in &role_perms {
             ctx.require_permission(perm, &target_scope)?;
@@ -380,17 +428,16 @@ impl AuthorizationService {
         self.identity_repo.assign_role(assignment).await
     }
 
+    /// Revokes `assignment_id` after loading its actual DB scope & role permissions inside the
+    /// transaction and verifying `ctx` holds `core:role:manage` plus every permission of that role
+    /// covering the actual scope (zero reliance on client-supplied `target_scope`).
     pub async fn revoke_assignment(
         &self,
         ctx: &AuthContext,
         assignment_id: Uuid,
-        target_scope: &Scope,
     ) -> Result<(), AppError> {
-        let manage_roles = PermissionKey::parse("core:role:manage")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        ctx.require_permission(&manage_roles, target_scope)?;
         self.identity_repo
-            .revoke_assignment_checked(assignment_id)
+            .revoke_assignment_authorized(ctx, assignment_id)
             .await
     }
 }
@@ -717,7 +764,10 @@ impl AdminBootstrapService {
             ));
         }
         self.identity_repo.seed_core_permissions().await?;
-        let phc = self.hasher.hash_new_password(password)?;
+        let phc = self
+            .hasher
+            .hash_new_password_async(password.clone())
+            .await?;
         let now = UtcMillis::now();
         let user_id = UserId::generate();
         let role_id = RoleId::generate();
@@ -787,7 +837,10 @@ impl AdminBootstrapService {
         new_password: &SecretString,
     ) -> Result<UserId, AppError> {
         let norm = normalize_username(username);
-        let phc = self.hasher.hash_new_password(new_password)?;
+        let phc = self
+            .hasher
+            .hash_new_password_async(new_password.clone())
+            .await?;
         let now = UtcMillis::now();
         let event = SecurityEvent {
             id: Uuid::now_v7(),
